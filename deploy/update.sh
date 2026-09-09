@@ -20,6 +20,10 @@ fi
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
 
+# Uten denne kan tunnelen kore uten aa skrive loggen — og da er den
+# offentlige adressen usynlig, selv om alt egentlig virker.
+mkdir -p logs
+
 echo "Henter oppdateringer (gren: $BRANCH)..."
 
 # Hent og flett EKSPLISITT mot origin, ikke via upstream-konfigurasjon.

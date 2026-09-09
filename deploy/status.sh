@@ -1,0 +1,84 @@
+#!/bin/bash
+# ============================================================================
+#  Viser tilstanden til serveren, tunnelen og koden.
+#
+#      bash deploy/status.sh
+#
+#  Kjor denne forst naar noe ikke virker. Den svarer paa: korer tjenestene,
+#  hvilken adresse har tunnelen NA, og hvilken versjon serveres.
+# ============================================================================
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DIR" || exit 1
+PORT="${PORT:-8080}"
+
+# Uten denne kan tunnelen kore uten aa skrive loggen — og da er den
+# offentlige adressen usynlig, selv om alt egentlig virker.
+mkdir -p logs
+
+line() { printf '%s\n' "------------------------------------------------------------"; }
+
+echo "Mappe: $DIR"
+line
+
+# --- Tjenester -------------------------------------------------------------
+for L in no.musicstreamerweb.server no.musicstreamerweb.tunnel; do
+  if OUT="$(launchctl print "gui/$UID/$L" 2>/dev/null)"; then
+    PID="$(echo "$OUT"  | awk '/^\tpid = /{print $3}')"
+    CODE="$(echo "$OUT" | awk '/last exit code = /{print $NF}')"
+    if [ -n "${PID:-}" ]; then
+      printf "%-34s KORER (pid %s)\n" "$L" "$PID"
+    else
+      printf "%-34s LASTET, men korer ikke (siste exit: %s)\n" "$L" "${CODE:-ukjent}"
+    fi
+  else
+    printf "%-34s IKKE LASTET\n" "$L"
+  fi
+done
+line
+
+# --- Svarer serveren? ------------------------------------------------------
+if curl -s -o /dev/null -m 4 -w '' "http://localhost:$PORT/" 2>/dev/null; then
+  echo "http://localhost:$PORT              svarer"
+else
+  echo "http://localhost:$PORT              SVARER IKKE"
+fi
+
+# --- Tunneladressen --------------------------------------------------------
+URL="$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' logs/tunnel.log 2>/dev/null | tail -1)"
+if [ -n "$URL" ]; then
+  echo "Tunneladresse:                      $URL"
+  echo "  (ny ved hver omstart av tunnelen — bruk alltid den siste)"
+else
+  echo "Tunneladresse:                      ikke funnet i logs/tunnel.log"
+fi
+line
+
+# --- Koden -----------------------------------------------------------------
+VER="$(grep -o "const VERSION = '[^']*'" public/index.html 2>/dev/null | head -1 | cut -d\' -f2)"
+echo "Versjon paa disk:                   ${VER:-ukjent}"
+
+if [ -d .git ]; then
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  git fetch origin "$BRANCH" >/dev/null 2>&1
+  BEHIND="$(git rev-list --count "HEAD..origin/$BRANCH" 2>/dev/null || echo '?')"
+  DIRTY="$(git status --porcelain 2>/dev/null | grep -vc '^??' || true)"
+  echo "Git:                                gren $BRANCH, $BEHIND commit(er) bak origin, $DIRTY endrede filer"
+  [ "${BEHIND:-0}" != "0" ] && echo "  → kjor: bash deploy/update.sh"
+fi
+line
+
+# --- Siste feil ------------------------------------------------------------
+if [ -s logs/server.err ]; then
+  echo "Siste linjer i logs/server.err:"
+  tail -6 logs/server.err | sed 's/^/  /'
+else
+  echo "logs/server.err er tom — ingen feil registrert."
+fi
+line
+echo "Starter ikke tjenestene? Kjor:  bash deploy/install.sh"
+echo
+echo "MERK: tjenestene er LaunchAgents og korer i din innloggede brukerokt."
+echo "      Etter en omstart starter de forst naar du har logget INN paa"
+echo "      maskinen. Staar den paa innloggingsskjermen, korer ingenting."
