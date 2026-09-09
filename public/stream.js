@@ -443,7 +443,11 @@ export class AudioReceiver {
     this.bytesReceived = 0;
     this.codec = null;
     this.decoder = null;
-    this.decodeErrors = 0;
+    this.decodeErrors = 0;    // dekoderen selv sa fra
+    this.copyErrors   = 0;    // dekodet fint, men vi klarte ikke lese ut lyden
+    this.chunkErrors  = 0;    // pakken ble avvist for dekoding
+    this.lastError    = '';
+    this.lastFormat   = '';
   }
 
   /**
@@ -461,10 +465,18 @@ export class AudioReceiver {
     if (p.seq > this.lastSeq) this.lastSeq = p.seq;
 
     if (!this.decoder) {
-      if (typeof AudioDecoder === 'undefined') { this.decodeErrors++; return; }
+      if (typeof AudioDecoder === 'undefined') {
+        this.decodeErrors++;
+        this.lastError = 'AudioDecoder finnes ikke i denne nettleseren';
+        return;
+      }
       this.decoder = new AudioDecoder({
         output: (audioData) => this._playDecoded(audioData),
-        error: (e) => { this.decodeErrors++; console.error('Opus-dekoder:', e); },
+        error: (e) => {
+          this.decodeErrors++;
+          this.lastError = `dekoder: ${e.message || e}`;
+          console.error('Opus-dekoder:', e);
+        },
       });
       this.decoder.configure({
         codec: OPUS_CONFIG.codec,
@@ -481,22 +493,51 @@ export class AudioReceiver {
         data: p.payload,
       }));
     } catch (e) {
-      this.decodeErrors++;
+      this.chunkErrors++;
+      this.lastError = `pakke: ${e.name} ${e.message}`;
     }
   }
 
   _playDecoded(audioData) {
-    const frames = audioData.numberOfFrames;
-    const sr = audioData.sampleRate;
+    const frames   = audioData.numberOfFrames;
+    const sr       = audioData.sampleRate;
+    const channels = audioData.numberOfChannels;
+    const fmt      = audioData.format;
     const serverMs = audioData.timestamp / 1000;      // tilbake til millisekunder
+
+    this.lastFormat = fmt;
 
     const ch0 = new Float32Array(frames);
     const ch1 = new Float32Array(frames);
+
     try {
-      audioData.copyTo(ch0, { planeIndex: 0, format: 'f32-planar' });
-      audioData.copyTo(ch1, {
-        planeIndex: audioData.numberOfChannels > 1 ? 1 : 0, format: 'f32-planar' });
-    } catch (e) { this.decodeErrors++; audioData.close(); return; }
+      // IKKE tving et format paa copyTo. Ber man om en konvertering
+      // nettleseren ikke stotter, kaster den — og da feiler HVER pakke, selv om
+      // dekodingen i seg selv gikk fint. Les heller det formatet vi faktisk fikk.
+      if (fmt === 'f32-planar') {
+        audioData.copyTo(ch0, { planeIndex: 0 });
+        audioData.copyTo(ch1, { planeIndex: channels > 1 ? 1 : 0 });
+
+      } else if (fmt === 'f32') {
+        // Interleavet: alt ligger i ett plan.
+        const inter = new Float32Array(frames * channels);
+        audioData.copyTo(inter, { planeIndex: 0 });
+        for (let i = 0; i < frames; i++) {
+          ch0[i] = inter[i * channels];
+          ch1[i] = channels > 1 ? inter[i * channels + 1] : ch0[i];
+        }
+
+      } else {
+        // Ukjent eller heltallsformat — be om konvertering som siste utvei.
+        audioData.copyTo(ch0, { planeIndex: 0, format: 'f32-planar' });
+        audioData.copyTo(ch1, { planeIndex: channels > 1 ? 1 : 0, format: 'f32-planar' });
+      }
+    } catch (e) {
+      this.copyErrors++;
+      this.lastError = `${fmt}: ${e.name} ${e.message}`;
+      audioData.close();
+      return;
+    }
     audioData.close();
 
     this.lastRate = sr;

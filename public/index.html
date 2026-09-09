@@ -205,7 +205,7 @@ import { AudioSender, AudioReceiver, OPUS_CONFIG } from './stream.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1123';
+const VERSION = '2026-09-09.1153';
 
 const $ = id => document.getElementById(id);
 const clock = new ClockSync();
@@ -614,7 +614,11 @@ setInterval(() => {
       (r.rateMismatch
         ? ` — SAMPLINGSRATE STEMMER IKKE (sender ${r.lastRate}, denne ${Math.round(ctx.sampleRate)}). Sett begge likt i Lyd-innstillingene.`
         : '') +
-      (r.decodeErrors ? ` · ${r.decodeErrors} dekodefeil` : '') +
+      (r.decodeErrors ? ` · ${r.decodeErrors} dekoderfeil` : '') +
+      (r.copyErrors  ? ` · ${r.copyErrors} utlesingsfeil` : '') +
+      (r.chunkErrors ? ` · ${r.chunkErrors} pakkefeil` : '') +
+      (r.lastFormat  ? ` · format ${r.lastFormat}` : '') +
+      (r.lastError   ? ` — ${r.lastError}` : '') +
       (r.late > r.played * 0.02 ? ' — øk bufferforsinkelsen' : '');
   }
 
