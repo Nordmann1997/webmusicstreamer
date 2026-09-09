@@ -145,9 +145,9 @@
 
   <div id="listenRow" hidden>
     <label class="row" style="margin-top:14px">
-      <span>Bufferforsinkelse</span><span><span id="bufval">400</span> ms</span>
+      <span>Bufferforsinkelse</span><span><span id="bufval">1000</span> ms</span>
     </label>
-    <input type="range" id="buf" min="100" max="1500" value="400" step="50">
+    <input type="range" id="buf" min="100" max="3000" value="1000" step="50">
     <label class="row" style="margin-top:10px">
       <span>Volum</span><span><span id="volval">100</span> %</span>
     </label>
@@ -198,6 +198,11 @@ import { ClockSync, AudioClockTracker, SyncedPlayer } from './sync.js';
 import { MicMeasurer, FREQ } from './measure.js';
 import { AudioSender, AudioReceiver, OPUS_CONFIG } from './stream.js';
 
+// Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
+// om en enhet kjorer den versjonen du tror den gjor — etter en manuell
+// filkopiering er det ellers umulig aa vite.
+const VERSION = '2026-09-09.0053';
+
 const $ = id => document.getElementById(id);
 const clock = new ClockSync();
 
@@ -215,6 +220,12 @@ function connect() {
 
   ws.onopen = () => {
     $('status').textContent = 'Tilkoblet — måler klokke...';
+
+    // Serveren teller takter fra 0 hver gang den starter. Husket vi ID-ene fra
+    // for, ville alle nye takter blitt avvist som duplikater — og da spiller
+    // klienten ingenting igjen, uten at noe ser galt ut.
+    scheduled.clear();
+    receiver?.timeline.reset();
     // Rask serie forst sa estimatet konvergerer med en gang,
     // deretter rolig vedlikehold.
     let burst = 0;
@@ -432,7 +443,7 @@ $('shareBtn').onclick = async () => {
   if (sender?.running) { sender.stop(); return; }
 
   try {
-    sender = new AudioSender(ctx, clock, ws, { audioClock });
+    sender = new AudioSender(ctx, clock, () => ws, { audioClock });
     sender.onstopped = () => { sender = null; updateStreamUI(); };
 
     // Senderen spiller sin EGEN strom, med samme bufferforsinkelse som alle
@@ -592,9 +603,9 @@ setInterval(() => {
       `${r.samples} målinger.`;
   }
   $('status').textContent =
-    `${pings} målinger · ${clicksPlayed} klikk spilt` +
+    `v${VERSION} · ${pings} målinger · ${clicksPlayed} klikk spilt` +
     (clicksMissed ? ` · ${clicksMissed} kom for sent` : '') +
-    '';
+    ` · buffer ${receiver ? receiver.bufferMs : $('buf').value} ms`;
 }, 250);
 
 connect();
