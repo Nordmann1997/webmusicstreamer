@@ -473,7 +473,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1620';
+const VERSION = '2026-09-09.1705';
 
 const $ = id => document.getElementById(id);
 
@@ -496,6 +496,9 @@ const visual = new AudioVisual($('bgCanvas'), {
   pressure: () => receiver ? receiver.late : 0,
 });
 visual.start(() => ctx ? ctx.currentTime : 0);
+// Tilgjengelig fra konsollen, saa bildekostnad kan maales paa en enhet uten
+// aa maatte legge inn kode forst.
+window.__visual = visual;
 
 // --- Tilkobling ------------------------------------------------------------
 function connect() {
@@ -977,7 +980,10 @@ setInterval(() => {
   $('status').textContent =
     `v${VERSION} · ${location.host} · ${pings} målinger · ${clicksPlayed} klikk spilt` +
     (clicksMissed ? ` · ${clicksMissed} kom for sent` : '') +
-    ` · buffer ${receiver ? receiver.bufferMs : $('buf').value} ms`;
+    ` · buffer ${receiver ? receiver.bufferMs : $('buf').value} ms` +
+    // Bildekostnaden maalt paa DENNE maskina. Det er dette tallet som avgjor
+    // om en modus er for dyr, ikke maalinger fra en annen datamaskin.
+    ` · bilde ${visual.frameMs.toFixed(2)} ms @ ${visual.fps} b/s`;
 }, 250);
 
 connect();
