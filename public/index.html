@@ -10,6 +10,13 @@
     --fg: #e6e9ef; --dim: #8b94a3; --accent: #5ac8fa; --good: #3ddc84; --warn: #ffb020;
   }
   * { box-sizing: border-box; }
+  /* Lerretet ligger bakerst. Sloret over holder teksten lesbar mens
+     nordlyset fortsatt kommer tydelig gjennom. */
+  #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
+              display: block; z-index: 0; }
+  #bgScrim  { position: fixed; inset: 0; z-index: 1; pointer-events: none;
+              background: rgba(14,17,22,.62); }
+  body > :not(#bgCanvas):not(#bgScrim) { position: relative; z-index: 2; }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -85,6 +92,9 @@
 </style>
 </head>
 <body>
+
+<canvas id="bgCanvas"></canvas>
+<div id="bgScrim"></div>
 
 <h1>Synk-målerigg</h1>
 <div class="sub" id="sub">Åpne denne på to enheter. Klikkene skal høres som ett.</div>
@@ -212,13 +222,15 @@
 import { ClockSync, AudioClockTracker, SyncedPlayer } from './sync.js';
 import { MicMeasurer, FREQ } from './measure.js';
 import { AudioSender, AudioReceiver, OPUS_CONFIG } from './stream.js';
+import { AudioVisual } from './visual.js';
 
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1240';
+const VERSION = '2026-09-09.1414';
 
 const $ = id => document.getElementById(id);
+let visual = null;
 const clock = new ClockSync();
 
 let ws, ctx, audioClock, player, measurer, sender, receiver;
@@ -367,6 +379,18 @@ $('start').onclick = async () => {
   setInterval(() => audioClock.sample(), 250);
 
   receiver = new AudioReceiver(ctx, player, { bufferMs: Number($('buf').value) });
+
+  // Bakgrunnen mates av de samme blokkene som spilles, merket med tida de
+  // skal spille paa. Da folger bildet den delte tidslinja og ikke maskinas
+  // egen — to enheter viser samme bolge i samme oyeblikk.
+  // Synken er forsteprioritet: `pressure` gjor at bildet gir fra seg rammer
+  // hvis lyden begynner aa komme for sent.
+  visual = new AudioVisual($('bgCanvas'), {
+    gain: 0.6, smooth: 0.69, fps: 30,
+    pressure: () => receiver ? receiver.late : 0,
+  });
+  receiver.onblock = (a, b, sr, when) => visual.feed(a, b, sr, when);
+  visual.start(() => ctx.currentTime);
 
   keepAwake().then(ok => {
     $('wakeNote').textContent = ok

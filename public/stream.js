@@ -595,6 +595,13 @@ export class AudioReceiver {
     src.connect(this.gain);
     src.start(when);
     this.played++;
+
+    // Gi blokka videre til den som vil se paa den — med tida den skal SPILLE
+    // paa, ikke tida den kom. Det er den merkinga som gjor at en bakgrunn kan
+    // bevege seg i takt mellom enheter av samme grunn som lyden gjor det.
+    if (this.onblock) {
+      try { this.onblock(c.ch0, c.ch1, p.sampleRate, when); } catch {}
+    }
   }
 
   get resyncs()          { return this.timeline.resyncs; }
