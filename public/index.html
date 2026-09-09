@@ -170,6 +170,13 @@
            border-radius: 999px; background: rgba(251,243,226,.72);
            backdrop-filter: blur(8px); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #b9a892; }
+  #tuneBtn {
+    display: none; margin: 10px auto 0; font: inherit; font-size: 12px;
+    font-weight: 600; color: var(--dim2); cursor: pointer;
+    background: rgba(251,243,226,.72); border: 1px solid rgba(78,74,112,.16);
+    border-radius: 999px; padding: 6px 12px; backdrop-filter: blur(8px);
+  }
+  body.playing #tuneBtn { display: block; }
   .dot.live { background: #4f9d69; }
   .dot.warn2 { background: #c98a3a; }
 
@@ -302,6 +309,7 @@
       <div class="state" style="margin-top:14px">
         <span class="dot" id="dot"></span><span id="stateTxt">Connecting …</span>
       </div>
+      <button id="tuneBtn">Adjust timing</button>
     </div>
     <button class="blob secondary" id="shareBlob">Share<br>to others</button>
   </div>
@@ -497,7 +505,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1915';
+const VERSION = '2026-09-09.2010';
 
 const $ = id => document.getElementById(id);
 
@@ -843,9 +851,6 @@ $('shareBtn').onclick = async () => {
       forcePcm: $('forcePcm').checked,
     });
     sender.onstopped = () => { sender = null; updateStreamUI(); };
-    // Som sender eier vi bufferet. Send det med en gang, sa alle som
-    // allerede er inne folger oss.
-    sendBuffer();
 
     // Senderen spiller sin EGEN strom, med samme bufferforsinkelse som alle
     // andre. Ellers ligger kilden alltid foran: ingenting forteller den at den
@@ -858,6 +863,9 @@ $('shareBtn').onclick = async () => {
       mode: $('srcMode').value,
       deviceId: $('inputDev').value || null,
     });
+    // Som sender eier vi bufferet. Foerst NAA, for sendBuffer krever at
+    // senderen faktisk kjorer — kalt for start() gjorde den ingenting.
+    sendBuffer();
     updateStreamUI();
   } catch (err) {
     sender = null;
@@ -1131,10 +1139,20 @@ $('okBtn').onclick   = () => {
   $('syncAsk').hidden = false; $('syncTune').hidden = true;   // neste gang: sporsmaalet forst
   paintFront();
 };
+// Edit henter fram KNAPPENE. Tidligere hentet den ogsaa sporsmaalsboksen, og
+// den ligger oppa knappene — resultatet var at Share ble uraabar for resten
+// av okta saa snart man hadde svart Ja en gang.
 $('editBtn').onclick = () => {
   const open = showControls || showTiming;
-  showControls = !open; showTiming = !open;
+  showControls = !open; showTiming = false;
   paintFront();
+};
+
+// Finjusteringa naas naar man vil, ikke bare i det ene oyeblikket den dukket
+// opp av seg selv.
+$('tuneBtn').onclick = () => {
+  $('syncAsk').hidden = true; $('syncTune').hidden = false;
+  showTiming = true; paintFront();
 };
 
 // Finjusteringa foran er den samme skyveren som i maleriggen, bare med
