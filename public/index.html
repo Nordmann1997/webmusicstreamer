@@ -69,6 +69,9 @@
               background: var(--good); color: #06120a; border: 0; border-radius: 8px; cursor: pointer; }
   #shareBtn.stop { background: #4a2020; color: var(--fg); }
   #streamBox input[type=range] { width: 100%; }
+  #showNames { margin-top: 8px; width: 100%; padding: 8px; font-size: 12px;
+               background: none; color: var(--dim); border: 1px solid var(--line);
+               border-radius: 6px; cursor: pointer; }
   #streamBox select { background: #0d1117; color: var(--fg); border: 1px solid var(--line);
                       border-radius: 6px; padding: 5px 8px; font-size: 13px; max-width: 62%; }
   #streamBox input[type=checkbox] { width: 20px; height: 20px; }
@@ -118,6 +121,7 @@
     </select>
   </label>
   <select id="inputDev" hidden style="width:100%;margin-top:8px"></select>
+  <button id="showNames" hidden>Vis enhetsnavn (krever mikrofontilgang)</button>
 
   <button id="shareBtn">Del lyden fra denne maskinen</button>
 
@@ -201,7 +205,7 @@ import { AudioSender, AudioReceiver, OPUS_CONFIG } from './stream.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.0053';
+const VERSION = '2026-09-09.1123';
 
 const $ = id => document.getElementById(id);
 const clock = new ClockSync();
@@ -359,36 +363,70 @@ $('start').onclick = async () => {
 };
 
 // --- Musikk ----------------------------------------------------------------
+/**
+ * Lister lydenhetene.
+ *
+ * VIKTIG: ber IKKE om mikrofonen. enumerateDevices() virker uten tillatelse —
+ * man far bare tomme navn. Aa be om mikrofonen bare for aa fylle en nedtrekks-
+ * liste er patrengende: brukeren far et tillatelsesvarsel uten aa ha bedt om
+ * noe som helst, og skjonner ikke hvorfor.
+ *
+ * Navnene hentes forst naar de faktisk trengs — se revealDeviceNames().
+ */
 async function loadDevices() {
-  // Uten mikrofontillatelse gir enumerateDevices bare "standard" uten navn.
-  try {
-    const perm = await navigator.permissions.query({ name: 'microphone' });
-    if (perm.state === 'prompt') {
-      const t = await navigator.mediaDevices.getUserMedia({ audio: true });
-      t.getTracks().forEach(x => x.stop());
-    }
-  } catch {}
-
   let devices = [];
   try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { return; }
 
   const ins  = devices.filter(d => d.kind === 'audioinput');
   const outs = devices.filter(d => d.kind === 'audiooutput');
+  const named = [...ins, ...outs].some(d => d.label);
 
-  $('inputDev').innerHTML = ins.map(d =>
-    `<option value="${d.deviceId}">${d.label || 'Inngang'}</option>`).join('');
+  $('inputDev').innerHTML = ins.map((d, i) =>
+    `<option value="${d.deviceId}">${d.label || `Inngang ${i + 1}`}</option>`).join('');
   $('outDev').innerHTML = '<option value="">Systemets standard</option>' +
-    outs.map(d => `<option value="${d.deviceId}">${d.label || 'Utgang'}</option>`).join('');
+    outs.map((d, i) => `<option value="${d.deviceId}">${d.label || `Utgang ${i + 1}`}</option>`).join('');
 
-  // Foreslaa en loopback-enhet hvis den finnes — det er den vanlige losningen
-  // for aa fange lyd fra en skrivebords-app.
-  const loop = ins.find(d => /blackhole|loopback|soundflower|vb-?cable|virtual/i.test(d.label));
-  if (loop) $('inputDev').value = loop.deviceId;
+  // Knappen vises bare naar navnene faktisk mangler.
+  $('showNames').hidden = named;
+
+  if (named) {
+    // Foreslaa en loopback-enhet hvis den finnes — vanlig losning for aa fange
+    // lyd fra en skrivebords-app.
+    const loop = ins.find(d => /blackhole|loopback|soundflower|vb-?cable|virtual/i.test(d.label));
+    if (loop) $('inputDev').value = loop.deviceId;
+  }
 }
+
+/**
+ * Henter enhetsNAVN. Krever mikrofontillatelse — nettleseren skjuler navnene
+ * ellers, fordi de i seg selv rober noe om maskinen.
+ *
+ * Kalles bare naar brukeren ber om det, eller velger loopback som kilde (der
+ * hele poenget er aa finne riktig enhet i lista).
+ */
+async function revealDeviceNames() {
+  try {
+    const t = await navigator.mediaDevices.getUserMedia({ audio: true });
+    t.getTracks().forEach(x => x.stop());       // vi ville bare ha navnene
+  } catch {
+    $('outHint').textContent =
+      'Uten mikrofontilgang viser nettleseren ikke enhetsnavn. Du kan fortsatt ' +
+      'velge enhet, men de heter bare «Inngang 1», «Utgang 2» og så videre.';
+    return;
+  }
+  await loadDevices();
+}
+
+$('showNames').onclick = () => revealDeviceNames();
 
 $('srcMode').onchange = () => {
   const input = $('srcMode').value === 'input';
   $('inputDev').hidden = !input;
+
+  // Aa velge loopback er en bevisst handling der man MA kunne se hvilken enhet
+  // som er hvilken — da er tillatelsesvarselet forventet i stedet for a komme
+  // ut av det bla.
+  if (input && !$('showNames').hidden) revealDeviceNames();
   $('shareHint').innerHTML = input
     ? 'Sett maskinens utgang til loopback-enheten (f.eks. BlackHole). Da blir ' +
       'kilden stille i høyttalerne, og nettleseren spiller den forsinkede ' +
