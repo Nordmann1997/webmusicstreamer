@@ -105,23 +105,55 @@ for L in "$LABEL_SRV" "$LABEL_TUN"; do
   echo "Startet:       $L"
 done
 
+# --- Svarer serveren? ------------------------------------------------------
 echo
-echo "Ferdig. Serveren korer pa http://localhost:$PORT"
+printf "Venter pa at serveren svarer"
+OK=0
+for _ in $(seq 1 20); do
+  if curl -s -o /dev/null -m 2 "http://localhost:$PORT/" 2>/dev/null; then OK=1; break; fi
+  printf "."
+  sleep 1
+done
+echo
+if [ "$OK" -eq 1 ]; then
+  echo "Serveren svarer paa http://localhost:$PORT"
+else
+  echo "SERVEREN SVARER IKKE paa http://localhost:$PORT"
+  echo "  Se:  tail -20 $DIR/logs/server.err"
+  exit 1
+fi
+
+# --- Tunneladressen --------------------------------------------------------
 if [ -f "$AGENTS/$LABEL_TUN.plist" ]; then
   echo
-  echo "Venter pa adressen fra tunnelen..."
-  for i in $(seq 1 20); do
+  printf "Venter pa adressen fra tunnelen"
+  URL=""
+  for _ in $(seq 1 60); do
     URL="$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$DIR/logs/tunnel.log" 2>/dev/null | tail -1)"
     [ -n "$URL" ] && break
+    printf "."
     sleep 1
   done
+  echo
+
   if [ -n "$URL" ]; then
     echo
-    echo "   ►  $URL"
+    echo "   ADRESSE:  $URL"
     echo
-    echo "Apne den adressen pa alle enhetene. Den endrer seg hver gang"
-    echo "tunnelen starter pa nytt — se deploy/README.md for fast adresse."
+    echo "Apne den paa alle enhetene. Den endrer seg hver gang tunnelen"
+    echo "starter pa nytt — se deploy/README.md for fast adresse."
   else
-    echo "Fant den ikke enna. Sjekk:  tail -f $DIR/logs/tunnel.log"
+    echo
+    echo "Fant ingen adresse etter 60 sekunder."
+    if pgrep -f "cloudflared tunnel --url http://localhost:$PORT" >/dev/null 2>&1; then
+      echo "  cloudflared KORER, men har ikke skrevet noen adresse."
+      echo "  Henger den paa 'Requesting new quick Tunnel', er det tjenesten"
+      echo "  hos Cloudflare som ikke svarer — vent noen minutter og kjor"
+      echo "  'bash deploy/reset.sh' pa nytt. Gratistunneler er ratebegrenset."
+    else
+      echo "  cloudflared korer IKKE. Se:  tail -20 $DIR/logs/tunnel.log"
+    fi
+    echo
+    echo "  Serveren virker uansett lokalt: http://localhost:$PORT"
   fi
 fi
