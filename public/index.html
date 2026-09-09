@@ -205,7 +205,7 @@ import { AudioSender, AudioReceiver, OPUS_CONFIG } from './stream.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1153';
+const VERSION = '2026-09-09.1201';
 
 const $ = id => document.getElementById(id);
 const clock = new ClockSync();
@@ -213,6 +213,7 @@ const clock = new ClockSync();
 let ws, ctx, audioClock, player, measurer, sender, receiver;
 let broadcastActive = false;
 let streamStart = performance.now();
+let reconnectTries = 0;
 let pings = 0, clicksPlayed = 0, clicksMissed = 0;
 let myRole = null, peerCount = 0;
 const scheduled = new Set();
@@ -223,6 +224,7 @@ function connect() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
+    reconnectTries = 0;
     $('status').textContent = 'Tilkoblet — måler klokke...';
 
     // Serveren teller takter fra 0 hver gang den starter. Husket vi ID-ene fra
@@ -287,7 +289,16 @@ function connect() {
   };
 
   ws.onclose = () => {
-    $('status').textContent = 'Frakoblet — kobler til igjen...';
+    reconnectTries++;
+    // Etter noen mislykkede forsok er det sjelden en midlertidig hikke.
+    // Den vanligste arsaken er at tunneladressen har byttet: trycloudflare gir
+    // en NY tilfeldig adresse hver gang tunnelen starter, og en fane som ligger
+    // igjen fra for peker da paa en vert som ikke finnes lenger.
+    $('status').textContent = reconnectTries < 4
+      ? 'Frakoblet — kobler til igjen...'
+      : `Får ikke kontakt med ${location.host}. ` +
+        'Adressen kan ha endret seg — hent den nye med «bash deploy/status.sh» ' +
+        'på maskinen som kjører serveren.';
     setTimeout(connect, 1000);
   };
 }
@@ -645,7 +656,7 @@ setInterval(() => {
       `${r.samples} målinger.`;
   }
   $('status').textContent =
-    `v${VERSION} · ${pings} målinger · ${clicksPlayed} klikk spilt` +
+    `v${VERSION} · ${location.host} · ${pings} målinger · ${clicksPlayed} klikk spilt` +
     (clicksMissed ? ` · ${clicksMissed} kom for sent` : '') +
     ` · buffer ${receiver ? receiver.bufferMs : $('buf').value} ms`;
 }, 250);
