@@ -142,7 +142,15 @@ export class AudioSender {
     this.ctx = ctx;
     this.clock = clock;
     this.audioClock = opts.audioClock ?? null;
-    this.ws = ws;
+
+    // Socketen hentes gjennom en funksjon, ikke lagres som verdi.
+    //
+    // Faller forbindelsen (serveromstart, WiFi-hikke), lager klienten en NY
+    // WebSocket. Hadde vi holdt paa den gamle, ville senderen fortsatt sendt
+    // inn i en lukket socket i det uendelige: den selv horer lyden fint via
+    // onlocalpacket, mens ingen av lytterne far noe som helst.
+    this._getWs = typeof ws === 'function' ? ws : () => ws;
+
     this.onlocalpacket = null;      // sa senderen kan spille sin egen strom
     this.suppressed = false;
     this.blockSize = opts.blockSize ?? OPUS_FRAME;   // 20 ms, samme som Opus-ramma
@@ -153,6 +161,9 @@ export class AudioSender {
     this.codec = 'pcm';
     this.encoder = null;
   }
+
+  /** Alltid den gjeldende socketen, aldri en utdatert kopi. */
+  get ws() { return this._getWs(); }
 
   /** Setter opp Opus-koderen. Faller stille tilbake til raa PCM hvis den ikke finnes. */
   async _initCodec() {
@@ -410,7 +421,11 @@ export class AudioReceiver {
     // Hvor lenge etter fangst lyden skal spilles. Alle mottakere bruker
     // SAMME verdi, sa de holder seg sammen. Storre = mer motstandsdyktig
     // mot nettverkssvingninger, men lengre forsinkelse.
-    this.bufferMs = opts.bufferMs ?? 400;
+    //
+    // 1000 ms som standard fordi dette normalt gaar over internett. Paa LAN
+    // holder 400 fint; over nett koster ekstra buffer bare forsinkelse, mens
+    // for lite buffer koster hakking — sa feilen tas heller paa den trygge sida.
+    this.bufferMs = opts.bufferMs ?? 1000;
 
     this.gain = ctx.createGain();
     this.gain.gain.value = opts.volume ?? 1;

@@ -29,6 +29,7 @@ node test/schedule.test.mjs       # tidsplan og rolletildeling (krever at den kj
 node test/stream.test.mjs         # lydpakkenes koding, dekoding og tidslinje
 node test/drift.test.mjs          # driftkorreksjonen over simulerte timer
 node test/relay.test.mjs          # at serveren relayer lyd uendret (krever at den kjører)
+node test/reconnect.test.mjs      # at sending overlever en serveromstart (krever at den kjører)
 ```
 
 ## Spille musikk
@@ -47,14 +48,17 @@ nøyaktig samme `SyncedPlayer` som allerede planlegger klikkene. Derfor treffer
 alle samme øyeblikk: de regner seg ikke fram til «nå», men til et **felles**
 tidspunkt.
 
-**Bufferforsinkelse** (standard 400 ms) er hvor lenge etter fangst lyden
+**Bufferforsinkelse** (standard 1000 ms) er hvor lenge etter fangst lyden
 spilles. Alle mottakere må bruke samme verdi. Større tåler mer svingning i
 nettverket, men gir lengre forsinkelse. Ser du mange «kom for sent», øk den.
+
+Standarden er satt for internett. På et lokalt nett holder 300–400 ms fint, og
+gir tydelig kjappere respons når du starter og stopper.
 
 ### Senderen må også vente — og kilden må bli stille
 
 Kilden spiller live. Ingenting forteller den at den skal vente på bufferet, så
-uten videre ligger den 400 ms foran alle andre. Løsningen er at senderen spiller
+uten videre ligger den et helt buffer foran alle andre. Løsningen er at senderen spiller
 sin **egen** strøm gjennom samme buffer som resten — avkrysningen *«Spill av her
 også»* — og at den direkte lyden ikke når høyttalerne.
 
@@ -301,6 +305,7 @@ Ekte WiFi blir dårligere. Det er det du skal måle nå.
 | `test/stream.test.mjs` | Lydpakkenes koding, presisjon, klipping og tidslinje |
 | `test/drift.test.mjs` | Driftkorreksjonen — simulerte timer med kjent klokkeavvik |
 | `test/relay.test.mjs` | At serveren relayer lyd uendret, og bare fra én sender |
+| `test/reconnect.test.mjs` | At sending og klikk overlever at forbindelsen faller |
 | `deploy/install.sh` | Setter opp server + tunnel som tjenester på en Mac |
 
 ## Driftkorreksjon
@@ -327,6 +332,24 @@ artefakt 47 ganger i sekundet. Sampledropp har ingen slik grense.
 
 Den sjekker også at korreksjonen aldri overstiger taket, og at ren
 nettverksstøy uten reell drift ikke får den til å ta av.
+
+## Etter en serveromstart
+
+Faller forbindelsen — serveromstart, WiFi-hikke — lager klienten en ny
+WebSocket. To ting må da ryddes, ellers ser alt riktig ut mens ingenting
+virker:
+
+**Senderen må følge med på den nye socketen.** `AudioSender` henter den
+gjennom en funksjon i stedet for å låse referansen ved oppstart. Uten det
+sendte den inn i en lukket socket i det uendelige: senderen hørte lyden fint
+selv, via sin egen lokale avspilling, mens ingen av lytterne fikk noe.
+
+**Takt-ID-ene må glemmes.** Serveren teller takter fra 0 hver gang den starter.
+Husket klienten ID-ene fra før, ble alle nye takter avvist som duplikater.
+`ws.onopen` tømmer derfor listen og nullstiller tidslinja.
+
+Begge er testet i `test/reconnect.test.mjs`, inkludert ende-til-ende mot en
+kjørende server.
 
 ## Neste steg
 
