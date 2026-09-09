@@ -52,6 +52,14 @@ const LAVA_STOPS = [0.90, 1.45, 2.40];
 // rad, ikke en gang per piksel — det tar en firedel av tida vekk.
 const LAVA_REACH = 3.4;
 
+// --- soyler ---------------------------------------------------------------
+const COL_MIN = 28, COL_MAX = 64;
+const FLOOR   = 0.985;      // bunnlinja, som andel av skjermhoyden
+const G_BALL  = 2.2;        // skjermhoyder per sekund^2
+// Hoyden soylene hviler paa naar ingenting spilles. Sida skal ikke vaere tom
+// naar du kommer inn, men naar musikken forst gaar faar den hele omraadet.
+const IDLE_H  = 0.40;
+
 // Aa dele paa en TOPPFOLGER var feil: toppen settes av det hardeste slaget,
 // og saa lenge laata fortsetter i samme styrke ligger hvert eneste slag paa
 // 1,0 — bildet staar stille paa maks. Naa deles det paa et SNITT, og
@@ -95,7 +103,13 @@ export class AudioVisual {
     this.g = canvas.getContext('2d', { alpha: false });
     this.gain   = opts.gain   ?? 0.6;
     this.smooth = opts.smooth ?? 0.69;
-    this.fps    = opts.fps    ?? 30;
+    // Bildefrekvens per modus, valgt etter maalt kostnad. En kule som glir
+    // jevnt avsloerer 30 bilder i sekundet med en gang: hver posisjon holdes
+    // i to skjermbilder. Flatene og soylene koster under en ms, saa 60 er
+    // gratis der. Lavalampa koster 1,6 ms og blir paa 30 — der er det
+    // ingenting som glir raskt nok til at det syns.
+    this.fpsFor = { aurora: 60, bars: 60, rave: 60, lava: 30 };
+    this.fps    = opts.fps ?? this.fpsFor.bars;
     this.pressure = opts.pressure || null;
 
     // --- filtertilstand, sammenhengende over pakkegrenser -----------------
@@ -153,6 +167,18 @@ export class AudioVisual {
       band: i % NB, ph: i * 1.9, rNow: 0.05,
     }));
     this.lavaIdx = new Int32Array(18);
+
+    // --- soyler og baller -------------------------------------------------
+    this.COLS = 40;
+    this.CH   = new Float32Array(this.COLS);   // tegnet hoyde per soyle
+    this.CTOP = new Float32Array(this.COLS).fill(FLOOR);
+    this.live = 0;                             // 0 = stille, 1 = musikk
+    this.balls = [
+      { x: 0.16, vx:  0.055, y: 0.35, vy: 0, r: 0.040 },
+      { x: 0.39, vx: -0.045, y: 0.30, vy: 0, r: 0.030 },
+      { x: 0.62, vx:  0.035, y: 0.38, vy: 0, r: 0.048 },
+      { x: 0.85, vx: -0.060, y: 0.32, vy: 0, r: 0.026 },
+    ];
 
     // --- rave ------------------------------------------------------------
     this.tunnel = 0; this.rot = 0; this.hue = 312; this.spokeTurn = 0;
@@ -342,6 +368,8 @@ export class AudioVisual {
 
   setMode(m) {
     this.mode = m;
+    this.fps = this.fpsFor[m] || 30;
+    this.throttled = false;
     this.BY.fill(0); this.BPK.fill(0);
     if (m === 'lava') this._lavaSetup();
   }
@@ -460,34 +488,108 @@ export class AudioVisual {
   }
 
   // =========================================================================
-  //  Soyler — klassisk, med topphold
+  //  Soyler — hele bredden, med baller som blir slaatt opp
   // =========================================================================
+  // Ti baand gir ti soyler, og ti soyler fyller ikke en skjerm. Vi
+  // interpolerer mellom baandene i stedet: fire ganger saa mange soyler,
+  // samme maaledata. Kurven mellom to baand er en glatt overgang, ikke
+  // oppdiktet opplosning.
+
+  /** Hoyden en soyle faktisk tegnes med — hvile og musikk blandet. */
+  _colFrac(c) {
+    const idle = IDLE_H * (0.82 + 0.18 * Math.sin(c * 0.42 + this.phase * 0.5));
+    const span = FLOOR - (TOP_LIMIT + 0.04);
+    return Math.max(0.010, idle + (span * this.CH[c] - idle) * this.live);
+  }
+
+  /** Flytter ett objekt ett bilde.
+   *  rFrac  = radius i hoydeenheter, rxFrac = radius i breddeenheter. */
+  _stepBall(o, s, rFrac, rxFrac) {
+    o.vy += G_BALL * s;
+    o.y  += o.vy * s;
+    o.x  += o.vx * s;
+    if (o.x < rxFrac)     { o.x = rxFrac;     o.vx =  Math.abs(o.vx); }
+    if (o.x > 1 - rxFrac) { o.x = 1 - rxFrac; o.vx = -Math.abs(o.vx); }
+
+    // En ball er bredere enn en soyle og hviler paa flere samtidig. Ser vi
+    // bare paa soyla under midten, synker den ned i en hoyere nabo. Loefter
+    // vi den med hele radien for den hoyeste soyla innenfor bredden, staar
+    // den paa luft saa snart en hoy soyle bare saa vidt roerer kanten.
+    // Riktig svar foelger av formen: en sirkel som roerer et stykke ute fra
+    // midten ligger lavere, med klaringa r*sqrt(1-u^2). Vi tar den strengeste.
+    const c0 = Math.max(0, Math.floor((o.x - rxFrac) * this.COLS));
+    const c1 = Math.min(this.COLS - 1, Math.floor((o.x + rxFrac) * this.COLS));
+    let yRest = Infinity, c = -1;
+    for (let k = c0; k <= c1; k++) {
+      const u = ((k + 0.5) / this.COLS - o.x) / rxFrac;
+      if (u <= -1 || u >= 1) continue;
+      const req = FLOOR - this._colFrac(k) - rFrac * Math.sqrt(1 - u * u);
+      if (req < yRest) { yRest = req; c = k; }
+    }
+
+    if (c >= 0 && o.y > yRest) {
+      const impact = Math.abs(o.vy);
+      o.y = yRest;
+      const rise = (this.CTOP[c] - (FLOOR - this._colFrac(c))) / s;
+      // Taket paa 1,6 gir et toppunkt paa drovt en halv skjerm. Uten det
+      // ville et hardt slag sendt ballen ut av bildet.
+      const kick = Math.min(1.6, Math.max(0, rise) * 0.85);
+      // Tre tilfeller, ikke ett. Med bare ett fikk en ball i ro et lite
+      // spark hver eneste ramme av at hvilebolgen steg saa vidt under den.
+      if (kick > 0.25)        o.vy = -kick;              // et ekte slag
+      else if (impact > 0.25) o.vy = -impact * 0.28;     // sprett etter fall
+      else                    o.vy = 0;                  // hviler
+    }
+    if (o.y < 0.04) { o.y = 0.04; o.vy = Math.abs(o.vy) * 0.4; }
+  }
+
   _drawBars(dt) {
     const g = this.g, W = this.W, H = this.H;
     const s = Math.min(dt, 50) / 1000;
     g.fillStyle = PALETTE.sky; g.fillRect(0, 0, W, H);
 
-    const floor = 0.94, ceil = TOP_LIMIT + 0.04, span = floor - ceil;
-    const slot = W * 0.84 / NB, bw = slot * 0.62;
-    const x0 = W * 0.08 + (slot - bw) / 2;
-    const rad = Math.min(bw * 0.5, H * 0.02);
+    const want = Math.max(COL_MIN, Math.min(COL_MAX, Math.round(W / this.dpr / 26)));
+    if (want !== this.COLS) {
+      this.COLS = want;
+      this.CH = new Float32Array(want);
+      this.CTOP = new Float32Array(want).fill(FLOOR);
+    }
+
+    // Hvor mye lyd er det? Naar det er stille glir soylene tilbake til
+    // hvilehoyden; naar musikken gaar overtar den helt. Overgangen tar drovt
+    // et sekund hver vei, saa den ikke rykker i pausen mellom to laater.
+    let sum = 0;
+    for (let n = 0; n < NB; n++) sum += this.BV[n];
+    this.live += ((sum > 0.0025 ? 1 : 0) - this.live) * (1 - Math.exp(-dt / 900));
 
     for (let n = 0; n < NB; n++) {
       const v = Math.min(1, this._bandRel(n) * this.gain * 1.5);
       this.BY[n] += (v - this.BY[n]) * (1 - Math.exp(-dt / 55));
-      // Toppen henger igjen og siger sakte ned. Uten den ser soylene ut som
-      // stoy; med den ser man hvor hardt det sist ble slaatt.
-      if (this.BY[n] > this.BPK[n]) this.BPK[n] = this.BY[n];
-      else this.BPK[n] = Math.max(this.BY[n], this.BPK[n] - s * 0.30);
-
-      const x = x0 + n * slot;
-      const h = Math.max(H * 0.012, H * span * this.BY[n]);
-      g.fillStyle = n < 3 ? PALETTE.l3 : n < 6 ? PALETTE.l2 : PALETTE.l1;
-      g.beginPath(); g.roundRect(x, H * floor - h, bw, h, [rad, rad, 0, 0]); g.fill();
-
-      g.fillStyle = PALETTE.accent;
-      g.fillRect(x, H * floor - H * span * this.BPK[n] - H * 0.006, bw, H * 0.006);
     }
+
+    const slot = W / this.COLS, bw = slot * 0.72;
+    const rad = Math.min(bw * 0.5, H * 0.014);
+    for (let c = 0; c < this.COLS; c++) {
+      const f = c / (this.COLS - 1) * (NB - 1);
+      const i0 = Math.floor(f), i1 = Math.min(NB - 1, i0 + 1), u = f - i0;
+      this.CH[c] = this.BY[i0] + (this.BY[i1] - this.BY[i0]) * u;
+
+      const h = Math.max(H * 0.010, H * this._colFrac(c));
+      g.fillStyle = c < this.COLS * 0.3 ? PALETTE.l3
+                  : c < this.COLS * 0.6 ? PALETTE.l2 : PALETTE.l1;
+      g.beginPath();
+      g.roundRect(c * slot + (slot - bw) / 2, H * FLOOR - h, bw, h, [rad, rad, 0, 0]);
+      g.fill();
+    }
+
+    const minWH = Math.min(W, H);
+    for (const b of this.balls) {
+      this._stepBall(b, s, b.r * (minWH / H), b.r * (minWH / W));
+      g.fillStyle = PALETTE.accent;
+      g.beginPath(); g.arc(W * b.x, H * b.y, minWH * b.r, 0, Math.PI * 2); g.fill();
+    }
+
+    for (let c = 0; c < this.COLS; c++) this.CTOP[c] = FLOOR - this._colFrac(c);
   }
 
   // =========================================================================

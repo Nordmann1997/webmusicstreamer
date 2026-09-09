@@ -179,8 +179,14 @@ export class AudioClockTracker {
     // Offset skal derimot folge raskt — men taale trinnstoy. Derfor median.
     this.offsetWindowMs  = opts.offsetWindowMs  ?? 4000;
 
+    // Et brudd i lydklokka er ikke drift. Naar en ny maling spretter mer enn
+    // dette fra modellen, har noe stanset eller hoppet — og da er historikken
+    // verdilos, ikke stoyete.
+    this.jumpMs = opts.jumpMs ?? 40;
+
     this.samples = [];       // { p: performanceTime ms, c: contextTime ms }
     this.source  = null;     // 'timestamp' | 'fallback'
+    this.resets  = 0;        // hvor mange brudd vi har sett
     this._p0     = null;
     this._rate   = 1;        // ms lydklokke per ms systemklokke
     this._offset = 0;        // ms
@@ -233,6 +239,29 @@ export class AudioClockTracker {
     const last = this.samples[this.samples.length - 1];
     if (last && s.p === last.p) return;
 
+    // BRUDD. Stopper lydklokka mens systemklokka gaar videre — fanestruping,
+    // bytte av utgangsenhet, Bluetooth som kobler seg paa, et oyeblikks dvale
+    // — legges det en knekk midt i linja, og HELE takten blir feil. Malt paa
+    // en simulert klokke med sant avvik +25 ppm ga ett sekunds stans et
+    // estimat paa -9900 ppm, altsa et halvt sekund feil per minutt, og
+    // tilstanden varte til malingen falt ut av vinduet to minutter senere.
+    //
+    // Vi kan ikke glatte oss ut av dette. Et brudd maa oppdages og
+    // historikken kastes: modellen fra for bruddet gjelder ikke lenger.
+    if (this.ready && last) {
+      const forventet = this._offset + this._rate * (s.p - this._p0);
+      if (Math.abs(s.c - forventet) > this.jumpMs) {
+        this.samples = [];
+        this._p0 = s.p;
+        this._offset = 0;
+        this.ready = false;
+        this.resets++;
+        // Takten beholdes: krystallen er den samme etter et brudd, og et
+        // gammelt takt-estimat er langt bedre enn ingen mens vi bygger opp
+        // et nytt tidsspenn.
+      }
+    }
+
     this.samples.push({ p: s.p, c: s.c });
 
     const cutoff = s.p - this.rateWindowMs;
@@ -250,8 +279,10 @@ export class AudioClockTracker {
     // TAKT — bare naar vi har nok tidsspenn til at stigningstallet betyr noe.
     if (spread >= this.minRateSpreadMs) {
       const fit = linearFit(this.samples.map(x => ({ x: x.p - this._p0, y: x.c })));
-      // Vern mot tull: alt utenfor ±10000 ppm er en maalefeil, ikke en krystall.
-      if (isFinite(fit.b) && Math.abs(fit.b - 1) < 0.01) this._rate = fit.b;
+      // Vern mot tull. Var grensa 10000 ppm, og den slapp gjennom alt
+      // bruddene lagde: ett sekunds stans ga -9900 ppm, rett innenfor.
+      // Ingen ekte krystall bommer med mer enn et par hundre ppm.
+      if (isFinite(fit.b) && Math.abs(fit.b - 1) < 300e-6) this._rate = fit.b;
     }
 
     // OFFSET — median av residualene i et kort vindu. Median, ikke snitt:

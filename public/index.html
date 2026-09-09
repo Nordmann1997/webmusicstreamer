@@ -162,32 +162,16 @@
     border-radius: 48% 52% 54% 46% / 52% 48% 52% 48%;
     box-shadow: 0 12px 28px rgba(120,60,35,.20), 0 0 0 2px rgba(194,116,74,.30) inset;
   }
+  /* Statuslinja lander midt i soylene og forsvant i dem. En liten
+     plate gjor den lesbar uansett hvor hoyt de staar. */
   .state { font-size: 14px; color: var(--dim2); min-height: 22px;
-           display: flex; align-items: center; justify-content: center; gap: 8px; }
+           display: flex; align-items: center; justify-content: center; gap: 8px;
+           width: max-content; margin-inline: auto; padding: 5px 12px;
+           border-radius: 999px; background: rgba(251,243,226,.72);
+           backdrop-filter: blur(8px); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #b9a892; }
   .dot.live { background: #4f9d69; }
   .dot.warn2 { background: #c98a3a; }
-
-  /* Bunnen ligger paa det morkeste laget og trenger sin egen flate. */
-  .foot {
-    display: grid; gap: 4px; margin-bottom: 4px;
-    background: rgba(251,243,226,.80); backdrop-filter: blur(14px);
-    border-radius: 20px; padding: 12px 16px 10px;
-    box-shadow: 0 8px 26px rgba(50,35,55,.14);
-    opacity: 0; pointer-events: none; transform: translateY(14px);
-    transition: opacity .32s ease, transform .32s ease;
-  }
-  body.timing .foot { opacity: 1; pointer-events: auto; transform: none; }
-  .foot .ftitle { font-size: 14px; line-height: 1.35; color: var(--ink); margin-bottom: 10px; }
-  .foot .lab { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim2); }
-  .foot .lab b { color: var(--ink); font-size: 14px; }
-  .foot input[type=range] { width: 100%; accent-color: var(--accent); height: 24px; }
-  .okbtn {
-    margin-top: 10px; width: 100%; cursor: pointer; font: inherit; font-weight: 700;
-    font-size: 15px; color: #fff6ee; border: 0; border-radius: 14px; padding: 11px 14px;
-    background: linear-gradient(180deg, #cb7f55, var(--accent-deep));
-    box-shadow: 0 8px 18px rgba(120,60,35,.26);
-  }
 
   /* Hjelpebobla vokser ut av knappene i stedet for aa legge seg over sida. */
   .bigblob {
@@ -200,8 +184,29 @@
     opacity: 0; pointer-events: none; max-height: 82vh; overflow: auto;
     transition: transform .34s cubic-bezier(.2,.9,.3,1.15), opacity .22s ease;
   }
-  body.sharing-help .bigblob { opacity: 1; pointer-events: auto;
-                               transform: translate(-50%, -50%) scale(1); }
+  body.sharing-help #shareHelp,
+  body.asking      #syncBox { opacity: 1; pointer-events: auto;
+                              transform: translate(-50%, -50%) scale(1); }
+  body.asking .middle { opacity: 0; pointer-events: none; }
+
+  .bigblob .lab { display: flex; justify-content: space-between;
+                  font-size: 12px; color: var(--dim2); margin-top: 4px; }
+  .bigblob .lab b { color: var(--ink); font-size: 14px; }
+  .bigblob input[type=range] { width: 100%; accent-color: var(--accent); height: 24px; }
+
+  /* Toppen sto tom naar tittelen vek. Her staar det hva enheten gjor. */
+  .nowLabel {
+    position: fixed; z-index: 4; left: 0; right: 0;
+    top: max(26px, env(safe-area-inset-top));
+    text-align: center; font-weight: 800; color: var(--ink);
+    font-size: clamp(26px, 5.2vw, 44px);
+    opacity: 0; transform: translateY(-8px); pointer-events: none;
+    transition: opacity .32s ease, transform .32s ease;
+  }
+  body.hidden .nowLabel { opacity: .92; transform: none; }
+  body.rave .nowLabel { color: #f2e9ff; }
+  /* Paa smal skjerm krangler hjornemerket og statusordet om samme linje. */
+  @media (max-width: 560px) { body.hidden .mark { opacity: 0; } }
   .bigblob h2 { margin: 0 0 10px; font-size: 21px; font-weight: 800; }
   .bigblob p { margin: 0 0 12px; font-size: 14px; line-height: 1.45; }
   .bigblob ol { margin: 0 0 12px; padding-left: 20px; font-size: 14px; line-height: 1.5; }
@@ -210,10 +215,15 @@
   .warnbox { background: rgba(194,116,74,.14); border: 1px solid rgba(194,116,74,.42);
              color: var(--accent-deep); border-radius: 14px; padding: 10px 12px;
              font-size: 13.5px; line-height: 1.4; margin-bottom: 12px; font-weight: 600; }
+  .okbtn {
+    cursor: pointer; font: inherit; font-weight: 700; font-size: 15px;
+    color: #fff6ee; border: 0; border-radius: 16px; padding: 11px 14px;
+    background: linear-gradient(180deg, #cb7f55, var(--accent-deep));
+    box-shadow: 0 8px 18px rgba(120,60,35,.26);
+  }
   .row2 { display: flex; gap: 8px; margin-top: 4px; }
   .row2 button { flex: 1; font: inherit; font-weight: 700; font-size: 15px;
-                 border-radius: 16px; padding: 11px 12px; cursor: pointer; border: 0;
-                 margin-top: 0; }
+                 border-radius: 16px; padding: 11px 12px; cursor: pointer; border: 0; }
   .row2 .ghost { background: rgba(78,74,112,.10); color: var(--ink);
                  border: 1px solid rgba(78,74,112,.20); }
 
@@ -275,6 +285,7 @@
 <canvas id="lavaCanvas"></canvas>
 
 <div class="mark">WebMultiroom</div>
+<div class="nowLabel" id="nowLabel">Playing</div>
 
 <div class="page">
   <header>
@@ -295,12 +306,25 @@
     <button class="blob secondary" id="shareBlob">Share<br>to others</button>
   </div>
 
-  <div class="foot" id="timingCard">
-    <div class="ftitle">Adjust audio timing if it is off, or if you are connected
-      to a Bluetooth speaker</div>
+</div>
+
+<div id="syncBox" class="bigblob">
+  <div id="syncAsk">
+    <h2>Is the music in sync?</h2>
+    <p>Listen to the rooms together. If one device is early or late, you can
+       nudge this one until they line up.</p>
+    <div class="row2">
+      <button class="ghost" id="syncNo">No, let me adjust</button>
+      <button class="okbtn" id="syncYes">Yes</button>
+    </div>
+  </div>
+  <div id="syncTune" hidden>
+    <h2>Adjust this device</h2>
+    <p class="fine2">Bluetooth speakers usually need a nudge later. Only this
+       device changes — the others stay where they are.</p>
     <div class="lab"><span>Earlier</span><span><b id="fineVal">0</b> ms</span><span>Later</span></div>
     <input type="range" id="fine" min="-150" max="150" step="1" value="0">
-    <button class="okbtn" id="okBtn">Everything OK</button>
+    <button class="okbtn" id="okBtn" style="width:100%;margin-top:12px">Done</button>
   </div>
 </div>
 
@@ -325,9 +349,9 @@
 </div>
 
 <div id="modes">
-  <button data-mode="aurora" class="on">Aurora</button>
+  <button data-mode="aurora">Aurora</button>
   <button data-mode="lava">Lava</button>
-  <button data-mode="bars">Bars</button>
+  <button data-mode="bars" class="on">Bars</button>
   <button data-mode="rave">Rave</button>
 </div>
 
@@ -473,7 +497,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1705';
+const VERSION = '2026-09-09.1915';
 
 const $ = id => document.getElementById(id);
 
@@ -530,6 +554,13 @@ function connect() {
     if (ev.data instanceof ArrayBuffer) { receiver?.onPacket(ev.data); return; }
 
     const msg = JSON.parse(ev.data);
+
+    if (msg.type === 'buffer') {
+      // Senderen eier verdien. Vi folger den, og viser den i panelet slik at
+      // det er tydelig at den kom utenfra og ikke ble satt her.
+      applyBuffer(msg.ms, 'fra senderen');
+      return;
+    }
 
     if (msg.type === 'pong') {
       clock.addExchange(msg.t1, msg.t2, msg.t3, t4);
@@ -812,6 +843,9 @@ $('shareBtn').onclick = async () => {
       forcePcm: $('forcePcm').checked,
     });
     sender.onstopped = () => { sender = null; updateStreamUI(); };
+    // Som sender eier vi bufferet. Send det med en gang, sa alle som
+    // allerede er inne folger oss.
+    sendBuffer();
 
     // Senderen spiller sin EGEN strom, med samme bufferforsinkelse som alle
     // andre. Ellers ligger kilden alltid foran: ingenting forteller den at den
@@ -832,10 +866,31 @@ $('shareBtn').onclick = async () => {
   }
 };
 
+/** Setter avspillingsforsinkelsen lokalt. Kalles baade av skyveren og av
+ *  meldinga fra senderen. */
+function applyBuffer(ms, kilde) {
+  const v = Math.round(Number(ms));
+  if (!isFinite(v)) return;
+  $('buf').value = v;
+  $('bufval').textContent = v;
+  if (receiver) receiver.bufferMs = v;
+  if (kilde) $('codecHint').textContent = `Forsinkelse ${v} ms ${kilde}.`;
+}
+
 $('buf').oninput = (e) => {
-  $('bufval').textContent = e.target.value;
-  if (receiver) receiver.bufferMs = Number(e.target.value);
+  applyBuffer(e.target.value, null);
+  // Er vi senderen, gjelder den for alle. Er vi ikke det, gjelder den bare
+  // her — og da overstyrer neste melding fra senderen den uansett.
+  sendBuffer();
 };
+
+/** Kringkast bufferet, men bare hvis vi faktisk er senderen. */
+function sendBuffer() {
+  if (!sender?.running) return;
+  if (ws?.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'buffer', ms: Number($('buf').value) }));
+  }
+}
 $('vol').oninput = (e) => {
   $('volval').textContent = e.target.value;
   receiver?.setVolume(Number(e.target.value) / 100);
@@ -1016,8 +1071,9 @@ function paintFront() {
   const playing = uiJoined;
   document.body.classList.toggle('playing', playing);
   document.body.classList.toggle('hidden', playing && !showControls);
-  document.body.classList.toggle('timing', showTiming);
+  document.body.classList.toggle('asking', showTiming);
   document.body.classList.toggle('open', showControls || showTiming);
+  $('nowLabel').textContent = sender?.running ? 'Streaming' : 'Playing';
   $('editBtn').textContent = (showControls || showTiming) ? 'Done' : 'Edit';
 }
 setInterval(paintFront, 700);
@@ -1066,7 +1122,15 @@ $('shareGo').onclick = () => {
   paintFront();
 };
 
-$('okBtn').onclick = () => { showTiming = false; showControls = false; paintFront(); };
+// Ja: ferdig. Nei: bytt boksens innhold til finjusteringa — samme boks paa
+// samme plass, saa det ikke foles som at et nytt vindu apner seg.
+$('syncYes').onclick = () => { showTiming = false; showControls = false; paintFront(); };
+$('syncNo').onclick  = () => { $('syncAsk').hidden = true; $('syncTune').hidden = false; };
+$('okBtn').onclick   = () => {
+  showTiming = false; showControls = false;
+  $('syncAsk').hidden = false; $('syncTune').hidden = true;   // neste gang: sporsmaalet forst
+  paintFront();
+};
 $('editBtn').onclick = () => {
   const open = showControls || showTiming;
   showControls = !open; showTiming = !open;
@@ -1090,12 +1154,13 @@ $('devBtn').onclick   = () => $('devPanel').classList.add('on');
 $('devClose').onclick = () => $('devPanel').classList.remove('on');
 
 // --- visuell modus, husket per enhet ---------------------------------------
-let MODE = 'aurora';
-try { MODE = localStorage.getItem('wmMode') || 'aurora'; } catch {}
+let MODE = 'bars';
+try { MODE = localStorage.getItem('wmMode') || 'bars'; } catch {}
 function applyMode() {
   visual.setMode(MODE);
   document.body.classList.toggle('rave', MODE === 'rave');
   document.body.classList.toggle('m-lava', MODE === 'lava');
+  document.body.classList.toggle('m-bars', MODE === 'bars');
   document.querySelectorAll('#modes button').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === MODE));
 }

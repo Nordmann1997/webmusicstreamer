@@ -58,6 +58,7 @@ const clients = new Set();
 
 // Én sender om gangen. Den forste som sender binaere data eier stromen til den
 // kobler fra — ellers ville to sendere blandet lyd hos lytterne.
+let bufferMs = null;      // felles avspillingsforsinkelse, eid av senderen
 let broadcaster = null;
 let audioPackets = 0;
 
@@ -82,6 +83,10 @@ wss.on('connection', (ws) => {
   console.log(`Klient koblet til som rolle ${ws.role} (${clients.size} totalt)`);
   ws.send(JSON.stringify({ type: 'role', role: ws.role }));
   if (broadcaster) ws.send(JSON.stringify({ type: 'broadcast', active: true }));
+  // Bufferet MAA vaere likt paa alle. Har den ene 400 ms og den andre 1000,
+  // spiller de noyaktig 600 ms fra hverandre, og alt annet ser riktig ut.
+  // Derfor eier senderen verdien, og den som kommer sent faar den med en gang.
+  if (bufferMs !== null) ws.send(JSON.stringify({ type: 'buffer', ms: bufferMs }));
   reassignRoles();
   announcePeers();
 
@@ -113,6 +118,14 @@ wss.on('connection', (ws) => {
       // t1 sendes uendret tilbake sa klienten slipper a holde styr paa den.
       ws.send(JSON.stringify({ type: 'pong', t1: msg.t1, t2, t3: now() }));
 
+    } else if (msg.type === 'buffer') {
+      // Bare senderen faar bestemme. Ellers kan en tilfeldig lytter dra
+      // hele rommet ut av takt ved aa flytte sin egen skyver.
+      if (broadcaster && ws !== broadcaster) return;
+      const v = Number(msg.ms);
+      if (!isFinite(v) || v < 100 || v > 5000) return;
+      bufferMs = Math.round(v);
+      broadcast({ type: 'buffer', ms: bufferMs });
     }
   });
 
