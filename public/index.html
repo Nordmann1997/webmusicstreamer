@@ -139,6 +139,16 @@
     forsinkede utgaven ut av samme høyttaler som ekko.
   </div>
 
+  <label class="row" style="margin-top:12px">
+    <span class="dim">Tving rå PCM (for Safari eldre enn 26)</span>
+    <input type="checkbox" id="forcePcm">
+  </label>
+  <div class="hint">
+    Opus krever WebCodecs, som kom i Safari 26. Skal en eldre Safari eller
+    iPhone være med, må senderen sende rå PCM — 12× mer båndbredde, men det
+    virker overalt.
+  </div>
+
   <div id="senderRow" hidden>
     <label class="row" style="margin-top:14px">
       <span class="dim">Spill av her også, i takt med de andre</span>
@@ -205,7 +215,7 @@ import { AudioSender, AudioReceiver, OPUS_CONFIG } from './stream.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1201';
+const VERSION = '2026-09-09.1210';
 
 const $ = id => document.getElementById(id);
 const clock = new ClockSync();
@@ -492,7 +502,10 @@ $('shareBtn').onclick = async () => {
   if (sender?.running) { sender.stop(); return; }
 
   try {
-    sender = new AudioSender(ctx, clock, () => ws, { audioClock });
+    sender = new AudioSender(ctx, clock, () => ws, {
+      audioClock,
+      forcePcm: $('forcePcm').checked,
+    });
     sender.onstopped = () => { sender = null; updateStreamUI(); };
 
     // Senderen spiller sin EGEN strom, med samme bufferforsinkelse som alle
@@ -631,6 +644,10 @@ setInterval(() => {
       (r.lastFormat  ? ` · format ${r.lastFormat}` : '') +
       (r.lastError   ? ` — ${r.lastError}` : '') +
       (r.late > r.played * 0.02 ? ' — øk bufferforsinkelsen' : '');
+  }
+
+  if (receiver?.opusUnsupported) {
+    $('streamState').textContent = 'kan ikke spille — Opus støttes ikke her';
   }
 
   // Horer mikrofonen i det hele tatt klikkene?

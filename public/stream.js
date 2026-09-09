@@ -160,6 +160,7 @@ export class AudioSender {
     this.running = false;
     this.codec = 'pcm';
     this.encoder = null;
+    this.forcePcm = opts.forcePcm ?? false;
   }
 
   /** Alltid den gjeldende socketen, aldri en utdatert kopi. */
@@ -167,7 +168,10 @@ export class AudioSender {
 
   /** Setter opp Opus-koderen. Faller stille tilbake til raa PCM hvis den ikke finnes. */
   async _initCodec() {
-    if (!(await opusSupported())) {
+    // Lytterne kan ha en nettleser som ikke dekoder Opus — WebCodecs
+    // AudioDecoder kom forst i Safari 26. Da ma senderen bruke raa PCM, for
+    // formatet velges her og forhandles ikke.
+    if (this.forcePcm || !(await opusSupported())) {
       this.codec = 'pcm';
       return;
     }
@@ -448,6 +452,7 @@ export class AudioReceiver {
     this.chunkErrors  = 0;    // pakken ble avvist for dekoding
     this.lastError    = '';
     this.lastFormat   = '';
+    this.opusUnsupported = false;
   }
 
   /**
@@ -467,7 +472,10 @@ export class AudioReceiver {
     if (!this.decoder) {
       if (typeof AudioDecoder === 'undefined') {
         this.decodeErrors++;
-        this.lastError = 'AudioDecoder finnes ikke i denne nettleseren';
+        this.opusUnsupported = true;
+        this.lastError =
+          'Denne nettleseren kan ikke dekode Opus (WebCodecs AudioDecoder ' +
+          'kom i Safari 26). Be senderen huke av «Tving rå PCM».';
         return;
       }
       this.decoder = new AudioDecoder({
