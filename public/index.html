@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Synk-målerigg</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171b22; --line: #262c36;
+    --fg: #e6e9ef; --dim: #8b94a3; --accent: #5ac8fa; --good: #3ddc84; --warn: #ffb020;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    padding: 24px 20px 48px; max-width: 620px; margin-inline: auto;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 24px; }
+
+  #start {
+    width: 100%; padding: 16px; font-size: 16px; font-weight: 600;
+    background: var(--accent); color: #06121a; border: 0; border-radius: 10px;
+    cursor: pointer; margin-bottom: 20px;
+  }
+  #start:disabled { opacity: .4; cursor: default; }
+
+  .beat-wrap { display: flex; justify-content: center; margin: 8px 0 28px; }
+  .beat {
+    width: 108px; height: 108px; border-radius: 50%;
+    border: 2px solid var(--line); background: var(--panel);
+    display: grid; place-items: center;
+    font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums;
+    transition: transform .09s ease-out, background .09s ease-out, border-color .09s ease-out;
+  }
+  .beat.hit     { transform: scale(1.13); background: #1d3547; border-color: var(--accent); }
+  .beat.accent  { transform: scale(1.20); background: #1e4034; border-color: var(--good); }
+
+  .banner { background: #2a2416; border: 1px solid #4a3d1a; color: var(--warn);
+            border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 16px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line);
+          border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .cell { background: var(--panel); padding: 12px 14px; }
+  .cell .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .cell .v { font-size: 20px; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .cell .n { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .v.good { color: var(--good); } .v.warn { color: var(--warn); }
+
+  .nudge { margin-top: 24px; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 16px; }
+  .nudge label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 10px; }
+  .nudge input { width: 100%; }
+  .nudge .hint { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  #reset { background: none; border: 1px solid var(--line); color: var(--dim);
+           border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+
+  .measure { margin-top: 16px; background: var(--panel); border: 1px solid var(--line);
+             border-radius: 10px; padding: 16px; }
+  .measure .row { display: flex; justify-content: space-between; align-items: center; }
+  .measure .hint { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  .measure input[type=checkbox] { width: 20px; height: 20px; }
+  .result { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .result .big { font-size: 34px; font-variant-numeric: tabular-nums; }
+  .result .big.good { color: var(--good); } .result .big.warn { color: var(--warn); }
+  .dim { color: var(--dim); font-size: 13px; }
+  #shareBtn { margin-top: 12px; width: 100%; padding: 12px; font-size: 15px; font-weight: 600;
+              background: var(--good); color: #06120a; border: 0; border-radius: 8px; cursor: pointer; }
+  #shareBtn.stop { background: #4a2020; color: var(--fg); }
+  #streamBox input[type=range] { width: 100%; }
+  #streamBox select { background: #0d1117; color: var(--fg); border: 1px solid var(--line);
+                      border-radius: 6px; padding: 5px 8px; font-size: 13px; max-width: 62%; }
+  #streamBox input[type=checkbox] { width: 20px; height: 20px; }
+
+  #autoCal { margin-top: 12px; width: 100%; padding: 10px; font-size: 14px;
+             background: #23303d; color: var(--fg); border: 1px solid var(--line);
+             border-radius: 8px; cursor: pointer; }
+
+  .status { margin-top: 20px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  code { background: #000; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>Synk-målerigg</h1>
+<div class="sub" id="sub">Åpne denne på to enheter. Klikkene skal høres som ett.</div>
+
+<button id="start">Start lyd</button>
+
+<div class="banner" id="banner" hidden></div>
+
+<div class="beat-wrap"><div class="beat" id="beat">—</div></div>
+
+<div class="grid">
+  <div class="cell"><div class="k">Klokkeavvik</div><div class="v" id="offset">—</div><div class="n">server − lokal</div></div>
+  <div class="cell"><div class="k">Usikkerhet</div><div class="v" id="unc">—</div><div class="n">halve laveste RTT</div></div>
+  <div class="cell"><div class="k">RTT</div><div class="v" id="rtt">—</div><div class="n">laveste / siste</div></div>
+  <div class="cell"><div class="k">Systemklokke</div><div class="v" id="skew">—</div><div class="n">min takt vs. server</div></div>
+  <div class="cell"><div class="k">Lydklokke</div><div class="v" id="drift">—</div><div class="n" id="driftnote">DAC vs. systemklokke</div></div>
+  <div class="cell"><div class="k">Utgangsforsinkelse</div><div class="v" id="lat">—</div><div class="n">rapportert av nettleseren</div></div>
+  <div class="cell"><div class="k">Kompensasjon</div><div class="v" id="comp">—</div><div class="n">faktisk brukt — bør ligne over</div></div>
+  <div class="cell"><div class="k">Tidskilde</div><div class="v" id="src" style="font-size:15px">—</div><div class="n" id="srcnote">for lydklokka</div></div>
+</div>
+
+
+<div class="measure" id="streamBox">
+  <label class="row">
+    <span><strong>Musikk</strong></span>
+    <span id="streamState" class="dim">ingen sender</span>
+  </label>
+
+  <label class="row" style="margin-top:12px">
+    <span class="dim">Lydkilde</span>
+    <select id="srcMode">
+      <option value="display">Skjerm eller fane</option>
+      <option value="input">Lydinngang (loopback)</option>
+    </select>
+  </label>
+  <select id="inputDev" hidden style="width:100%;margin-top:8px"></select>
+
+  <button id="shareBtn">Del lyden fra denne maskinen</button>
+
+  <div class="hint" id="shareHint"></div>
+
+  <label class="row" style="margin-top:14px">
+    <span class="dim">Spill av på</span>
+    <select id="outDev"><option value="">Systemets standard</option></select>
+  </label>
+  <div class="hint" id="codecHint"></div>
+
+  <div class="hint" id="outHint">
+    Skal denne maskinen både være kilde og høyttaler, må nettleseren spille ut
+    på en <em>annen</em> enhet enn systemets utgang — ellers går kilden og den
+    forsinkede utgaven ut av samme høyttaler som ekko.
+  </div>
+
+  <div id="senderRow" hidden>
+    <label class="row" style="margin-top:14px">
+      <span class="dim">Spill av her også, i takt med de andre</span>
+      <input type="checkbox" id="playHere" checked>
+    </label>
+    <div class="hint" id="suppressNote"></div>
+  </div>
+
+  <div id="listenRow" hidden>
+    <label class="row" style="margin-top:14px">
+      <span>Bufferforsinkelse</span><span><span id="bufval">400</span> ms</span>
+    </label>
+    <input type="range" id="buf" min="100" max="1500" value="400" step="50">
+    <label class="row" style="margin-top:10px">
+      <span>Volum</span><span><span id="volval">100</span> %</span>
+    </label>
+    <input type="range" id="vol" min="0" max="100" value="100" step="1">
+    <div class="hint" id="streamStats"></div>
+  </div>
+
+  <label class="row" style="margin-top:12px">
+    <span class="dim" style="font-size:13px">Behold klikk mens musikken går</span>
+    <input type="checkbox" id="keepClicks">
+  </label>
+</div>
+
+<div class="measure">
+  <label class="row">
+    <span><strong>Mål med mikrofon</strong></span>
+    <input type="checkbox" id="micToggle">
+  </label>
+  <div class="hint" id="micHint">
+    Enhetene klikker samtidig på hver sin tonehøyde, og denne tar opp begge.
+    Sett mikrofonen omtrent like langt fra begge høyttalerne — 34 cm skjevt
+    gir 1 ms feil.
+  </div>
+  <div id="micResult" class="result" hidden>
+    <div class="big" id="syncErr">—</div>
+    <div class="hint" id="syncDetail"></div>
+    <div class="hint" id="micStats"></div>
+    <button id="autoCal">Kalibrer denne enheten automatisk</button>
+  </div>
+</div>
+
+<div class="nudge">
+  <label>
+    <span>Manuell justering</span>
+    <span><span id="nudgeval">0</span> ms &nbsp; <button id="reset">Nullstill</button></span>
+  </label>
+  <input type="range" id="nudge" min="-300" max="300" value="0" step="1">
+  <div class="hint">
+    Positiv = spill <em>senere</em>, samme fortegn som «+ = add delay» i synctest.
+    Verdien huskes per enhet. Ligger denne enheten foran den andre, skal den opp.
+  </div>
+</div>
+
+<div class="status" id="status">Ikke tilkoblet</div>
+
+<script type="module">
+import { ClockSync, AudioClockTracker, SyncedPlayer } from './sync.js';
+import { MicMeasurer, FREQ } from './measure.js';
+import { AudioSender, AudioReceiver, OPUS_CONFIG } from './stream.js';
+
+const $ = id => document.getElementById(id);
+const clock = new ClockSync();
+
+let ws, ctx, audioClock, player, measurer, sender, receiver;
+let broadcastActive = false;
+let streamStart = performance.now();
+let pings = 0, clicksPlayed = 0, clicksMissed = 0;
+let myRole = null, peerCount = 0;
+const scheduled = new Set();
+
+// --- Tilkobling ------------------------------------------------------------
+function connect() {
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    $('status').textContent = 'Tilkoblet — måler klokke...';
+    // Rask serie forst sa estimatet konvergerer med en gang,
+    // deretter rolig vedlikehold.
+    let burst = 0;
+    const fast = setInterval(() => {
+      ping();
+      if (++burst >= 12) { clearInterval(fast); setInterval(ping, 1000); }
+    }, 120);
+  };
+
+  ws.onmessage = (ev) => {
+    const t4 = performance.now();           // stempl FORST
+
+    // Lydpakker kommer binaert og gaar rett til mottakeren.
+    if (ev.data instanceof ArrayBuffer) { receiver?.onPacket(ev.data); return; }
+
+    const msg = JSON.parse(ev.data);
+
+    if (msg.type === 'pong') {
+      clock.addExchange(msg.t1, msg.t2, msg.t3, t4);
+      pings++;
+
+    } else if (msg.type === 'role') {
+      myRole = msg.role;
+      updateBanner();
+
+    } else if (msg.type === 'peers') {
+      peerCount = msg.count;
+      updateBanner();
+
+    } else if (msg.type === 'broadcast') {
+      broadcastActive = msg.active;
+      if (msg.active) streamStart = performance.now();
+      updateStreamUI();
+
+    } else if (msg.type === 'clicks' && player) {
+      for (const c of msg.clicks) {
+        if (scheduled.has(c.n)) continue;
+        scheduled.add(c.n);
+        if (broadcastActive && !$('keepClicks').checked) continue;   // musikk gaar
+
+        // Begge enheter spiller HVER takt — samtidig, men paa hver sin
+        // frekvens. Da hores flam direkte hvis de er ute av synk, og
+        // mikrofonen kan likevel skille dem fra hverandre.
+        const when = player.scheduleClick(c.at, {
+          freq: FREQ[myRole ?? 0],
+          gain: c.accent ? 0.32 : 0.20,
+        });
+        when === null ? clicksMissed++ : clicksPlayed++;
+        if (when !== null) {
+          showBeat(c);
+          measurer?.expect(when);
+        }
+      }
+    }
+  };
+
+  ws.onclose = () => {
+    $('status').textContent = 'Frakoblet — kobler til igjen...';
+    setTimeout(connect, 1000);
+  };
+}
+
+function ping() {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'ping', t1: performance.now() }));
+  }
+}
+
+function updateBanner() {
+  const me = myRole === null ? '?' : (myRole === 0 ? 'A' : 'B');
+  const el = $('banner');
+  el.hidden = peerCount >= 2;
+  if (!el.hidden) el.textContent = 'Bare én enhet tilkoblet — åpne siden på én til.';
+
+  $('sub').textContent = `Denne enheten er ${me} (${FREQ[myRole ?? 0]} Hz)` +
+    (peerCount ? ` · ${peerCount} enhet${peerCount === 1 ? '' : 'er'} tilkoblet` : '');
+}
+
+// --- Visuell puls, planlagt paa samme tid som lyden -------------------------
+function showBeat(c) {
+  const localMs = clock.localTimeAt(c.at + player.manualOffsetMs);
+  const delay = localMs - performance.now();
+  setTimeout(() => {
+    const el = $('beat');
+    el.textContent = (c.n % 4) + 1;
+    el.classList.add(c.accent ? 'accent' : 'hit');
+    setTimeout(() => el.classList.remove('hit', 'accent'), 90);
+  }, Math.max(0, delay));
+}
+
+// --- Start lyd (krever brukerklikk, spesielt paa iOS) ----------------------
+$('start').onclick = async () => {
+  // 'playback' ber nettleseren om et STORT utgangsbuffer. Det var feil her:
+  // vi planlegger uansett sekunder fram i tid, sa vi trenger ikke bufferet —
+  // og hvert millisekund i det er forsinkelse vi maa gjette oss til igjen.
+  // Pa macOS kan 'playback' gi over 100 ms buffer, som blir ~100 ms for tidlig
+  // avspilling hvis kompensasjonen ikke treffer. 'interactive' gir 5-15 ms.
+  // 48 kHz eksplisitt, av to grunner: Opus stotter ikke 44,1 kHz, og naar alle
+  // enheter kjorer samme rate slipper vi resampling i hver pakkegrense.
+  ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
+  await ctx.resume();
+
+  audioClock = new AudioClockTracker(ctx);
+  player = new SyncedPlayer(ctx, clock, audioClock);
+
+  // Hent lagret kalibrering for denne enheten
+  let saved = 0;
+  try { saved = Number(localStorage.getItem('syncNudgeMs')) || 0; } catch {}
+  if (saved) { $('nudge').value = saved; $('nudgeval').textContent = saved; }
+  player.manualOffsetMs = saved;
+
+  audioClock.sample();
+  setInterval(() => audioClock.sample(), 250);
+
+  receiver = new AudioReceiver(ctx, player, { bufferMs: Number($('buf').value) });
+  loadDevices();
+  $('srcMode').onchange();
+
+  import('./stream.js').then(async ({ opusSupported }) => {
+    const ok = await opusSupported();
+    $('codecHint').innerHTML = ok
+      ? `Opus tilgjengelig — ca. ${OPUS_CONFIG.bitrate/1000} kbit/s per lytter, ` +
+        'omtrent 12× mindre enn rå PCM.'
+      : '<strong>Opus mangler i denne nettleseren.</strong> Faller tilbake til rå ' +
+        'PCM, ~1,5 Mbit/s per lytter — greit på LAN, for mye over internett.';
+  });
+
+  $('start').disabled = true;
+  $('start').textContent = 'Lyd i gang';
+  updateStreamUI();
+};
+
+// --- Musikk ----------------------------------------------------------------
+async function loadDevices() {
+  // Uten mikrofontillatelse gir enumerateDevices bare "standard" uten navn.
+  try {
+    const perm = await navigator.permissions.query({ name: 'microphone' });
+    if (perm.state === 'prompt') {
+      const t = await navigator.mediaDevices.getUserMedia({ audio: true });
+      t.getTracks().forEach(x => x.stop());
+    }
+  } catch {}
+
+  let devices = [];
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { return; }
+
+  const ins  = devices.filter(d => d.kind === 'audioinput');
+  const outs = devices.filter(d => d.kind === 'audiooutput');
+
+  $('inputDev').innerHTML = ins.map(d =>
+    `<option value="${d.deviceId}">${d.label || 'Inngang'}</option>`).join('');
+  $('outDev').innerHTML = '<option value="">Systemets standard</option>' +
+    outs.map(d => `<option value="${d.deviceId}">${d.label || 'Utgang'}</option>`).join('');
+
+  // Foreslaa en loopback-enhet hvis den finnes — det er den vanlige losningen
+  // for aa fange lyd fra en skrivebords-app.
+  const loop = ins.find(d => /blackhole|loopback|soundflower|vb-?cable|virtual/i.test(d.label));
+  if (loop) $('inputDev').value = loop.deviceId;
+}
+
+$('srcMode').onchange = () => {
+  const input = $('srcMode').value === 'input';
+  $('inputDev').hidden = !input;
+  $('shareHint').innerHTML = input
+    ? 'Sett maskinens utgang til loopback-enheten (f.eks. BlackHole). Da blir ' +
+      'kilden stille i høyttalerne, og nettleseren spiller den forsinkede ' +
+      'utgaven ut på den ekte utgangen du velger under.'
+    : '<strong>Del helst en fane</strong>, ikke hele skjermen: bare da kan ' +
+      'nettleseren dempe den direkte lyden selv, og denne maskinen kan være ' +
+      'høyttaler uten ekko. Husk å huke av for «Del fanens lyd».';
+};
+
+$('outDev').onchange = async () => {
+  if (!ctx) return;
+  const id = $('outDev').value;      // tom streng = systemets standardenhet
+  if (typeof ctx.setSinkId !== 'function') {
+    $('outHint').textContent =
+      'Denne nettleseren kan ikke velge utgang (krever Chrome 110+).';
+    return;
+  }
+  try {
+    await ctx.setSinkId(id);
+    const name = $('outDev').selectedOptions[0]?.textContent || 'standard';
+    $('outHint').textContent = `Nettleseren spiller nå ut på: ${name}.`;
+  } catch (e) {
+    $('outHint').textContent = 'Kunne ikke bytte utgang: ' + e.message;
+  }
+};
+
+
+function updateStreamUI() {
+  const iAmSender = !!sender?.running;
+  $('streamState').textContent = iAmSender ? 'du sender'
+                                : broadcastActive ? 'mottar' : 'ingen sender';
+  $('shareBtn').textContent = iAmSender ? 'Stopp deling' : 'Del lyden fra denne maskinen';
+  $('shareBtn').classList.toggle('stop', iAmSender);
+  $('shareBtn').disabled = !iAmSender && broadcastActive;
+  $('listenRow').hidden = !broadcastActive;
+  $('senderRow').hidden = !iAmSender;
+
+  if (iAmSender) {
+    $('suppressNote').innerHTML = sender.suppressed
+      ? '✓ Kilden går ikke til høyttalerne. Du hører bare den forsinkede ' +
+        'utgaven, i takt med de andre.'
+      : '<strong>Dette gir ekko.</strong> Den direkte lyden går fortsatt ut av ' +
+        'høyttalerne, samtidig som nettleseren spiller den forsinkede utgaven. ' +
+        'Del en <em>fane</em> i stedet, eller bruk loopback-enhet som kilde og ' +
+        'velg en annen utgang over — å skru ned volumet demper begge to.';
+  }
+}
+
+$('shareBtn').onclick = async () => {
+  if (!ctx) { alert('Trykk "Start lyd" først.'); return; }
+
+  if (sender?.running) { sender.stop(); return; }
+
+  try {
+    sender = new AudioSender(ctx, clock, ws, { audioClock });
+    sender.onstopped = () => { sender = null; updateStreamUI(); };
+
+    // Senderen spiller sin EGEN strom, med samme bufferforsinkelse som alle
+    // andre. Ellers ligger kilden alltid foran: ingenting forteller den at den
+    // skal vente, sa den spiller live mens resten venter paa bufferet.
+    sender.onlocalpacket = (buf) => {
+      if ($('playHere').checked) receiver?.onPacket(buf);
+    };
+
+    await sender.start({
+      mode: $('srcMode').value,
+      deviceId: $('inputDev').value || null,
+    });
+    updateStreamUI();
+  } catch (err) {
+    sender = null;
+    alert('Kunne ikke dele lyd: ' + err.message);
+    updateStreamUI();
+  }
+};
+
+$('buf').oninput = (e) => {
+  $('bufval').textContent = e.target.value;
+  if (receiver) receiver.bufferMs = Number(e.target.value);
+};
+$('vol').oninput = (e) => {
+  $('volval').textContent = e.target.value;
+  receiver?.setVolume(Number(e.target.value) / 100);
+};
+
+// --- Mikrofonmaling ---------------------------------------------------------
+$('micToggle').onchange = async (e) => {
+  if (e.target.checked) {
+    if (!ctx) { alert('Trykk "Start lyd" forst.'); e.target.checked = false; return; }
+    try {
+      measurer = new MicMeasurer(ctx, myRole ?? 0);
+      await measurer.start();
+      $('micResult').hidden = false;
+      $('micHint').textContent =
+        'Måler. Rytmen endrer seg ikke — enhetene skilles på tonehøyde, ikke ' +
+        'på takt. Hold det stille i rommet.';
+    } catch (err) {
+      alert('Fikk ikke tilgang til mikrofonen: ' + err.message);
+      e.target.checked = false;
+      measurer = null;
+    }
+  } else {
+    measurer?.stop();
+    measurer = null;
+    $('micResult').hidden = true;
+  }
+};
+
+function setNudge(v) {
+  v = Math.round(v);
+  $('nudge').value = v;
+  $('nudgeval').textContent = v;
+  if (player) player.manualOffsetMs = v;
+  try { localStorage.setItem('syncNudgeMs', String(v)); } catch {}
+}
+$('nudge').oninput = (e) => setNudge(Number(e.target.value));
+$('reset').onclick  = () => setNudge(0);
+
+// Bruk mikrofonmalingen til aa sette justeringen automatisk.
+$('autoCal').onclick = () => {
+  const r = measurer?.lastResult;
+  if (!r || r.samples < 4) { alert('Vent til malingen har minst 4 malinger.'); return; }
+  // syncErrorMs > 0: den andre spiller senere → denne ma forsinkes like mye.
+  setNudge(player.manualOffsetMs + r.syncErrorMs);
+  $('syncDetail').textContent = 'Kalibrert. Vent noen takter, sa skal tallet ga mot null.';
+};
+
+// --- Avlesning -------------------------------------------------------------
+const ms  = (v, d = 2) => isFinite(v) ? `${v.toFixed(d)} ms` : '—';
+const ppm = (v)        => isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(1)} ppm` : '—';
+
+setInterval(() => {
+  if (!clock.ready) return;
+
+  $('offset').textContent = ms(clock.offsetMs, 1);
+  $('rtt').textContent    = `${clock.minRtt.toFixed(1)} / ${clock.lastRtt.toFixed(1)} ms`;
+  $('skew').textContent   = ppm(clock.skewPpm);
+
+  const u = $('unc');
+  u.textContent = ms(clock.uncertaintyMs);
+  u.className = 'v ' + (clock.uncertaintyMs < 10 ? 'good' : 'warn');
+
+  if (audioClock?.ready) {
+    const d = $('drift');
+    d.textContent = ppm(audioClock.driftPpm);
+    d.className = 'v ' + (Math.abs(audioClock.driftPpm) < 200 ? 'good' : 'warn');
+
+    // Et driftestimat uten nok tidsspenn er ikke "null drift", det er "vet ikke".
+    const spreadS = audioClock.rateSpreadMs / 1000;
+    $('driftnote').textContent = spreadS < 20
+      ? `måler ennå — ${spreadS.toFixed(0)} av 20 s`
+      : `DAC vs. systemklokke · ${spreadS.toFixed(0)} s måling`;
+  }
+  if (ctx) {
+    $('lat').textContent = ctx.outputLatency
+      ? ms(ctx.outputLatency * 1000, 1)
+      : 'ikke rapportert';
+  }
+  if (audioClock?.ready) {
+    $('comp').textContent = ms(audioClock.compensationMs, 1);
+    $('src').textContent  = audioClock.source === 'timestamp'
+      ? 'getOutputTimestamp'
+      : 'outputLatency (reserve)';
+    $('srcnote').textContent = audioClock.timestampRejected
+      ? 'getOutputTimestamp forkastet — ga ~0 etterslep'
+      : 'for lydklokka';
+  }
+
+  if (sender?.running) {
+    const secs = (performance.now() - streamStart) / 1000;
+    const kbit = secs > 0 ? (sender.bytesSent * 8 / 1000) / secs : 0;
+    $('streamState').textContent =
+      `du sender · ${sender.codec === 'opus' ? 'Opus' : 'rå PCM'} · ${kbit.toFixed(0)} kbit/s`;
+  } else if (receiver && receiver.received > 0) {
+    const r = receiver;
+    const secs = (performance.now() - streamStart) / 1000;
+    $('streamStats').textContent =
+      `${r.codec === 'opus' ? 'Opus' : 'rå PCM'} · ${r.bitrate(secs).toFixed(0)} kbit/s · ` +
+      `${r.played} spilt av ${r.received} mottatt` +
+      (r.late ? ` · ${r.late} kom for sent` : '') +
+      (r.gaps ? ` · ${r.gaps} tapt underveis` : '') +
+      (r.resyncs > 1 ? ` · ${r.resyncs - 1} resynk` : '') +
+      (r.correctedSamples ? ` · drift ${r.driftErrorMs.toFixed(2)} ms, ${r.correctedSamples} samples rettet` : '') +
+      (r.lastRate ? ` · ${r.lastRate} Hz` : '') +
+      (r.rateMismatch
+        ? ` — SAMPLINGSRATE STEMMER IKKE (sender ${r.lastRate}, denne ${Math.round(ctx.sampleRate)}). Sett begge likt i Lyd-innstillingene.`
+        : '') +
+      (r.decodeErrors ? ` · ${r.decodeErrors} dekodefeil` : '') +
+      (r.late > r.played * 0.02 ? ' — øk bufferforsinkelsen' : '');
+  }
+
+  // Horer mikrofonen i det hele tatt klikkene?
+  if (measurer) {
+    const m = measurer;
+    $('micStats').textContent =
+      `Av ${m.expected} takter: fant ${m.foundSelf} egne, ${m.foundOther} fra den andre` +
+      (m.ratioSelf ? ` · signal/støy ${m.ratioSelf.toFixed(0)}× / ${m.ratioOther.toFixed(0)}×` : '') +
+      (m.expected > 5 && m.foundOther === 0
+        ? ' — hører ikke den andre enheten. Skru opp volumet der, eller flytt mikrofonen nærmere.'
+        : '');
+  }
+
+  // Resultat fra mikrofonmalingen
+  const r = measurer?.lastResult;
+  if (r) {
+    const e = $('syncErr');
+    e.textContent = `${r.syncErrorMs >= 0 ? '+' : ''}${r.syncErrorMs.toFixed(1)} ms`;
+    e.className = 'big ' + (Math.abs(r.syncErrorMs) < 10 ? 'good' : 'warn');
+    $('syncDetail').textContent =
+      `Den andre enheten spiller ${r.syncErrorMs >= 0 ? 'SENERE' : 'TIDLIGERE'} enn denne. ` +
+      `Egne klikk ${r.selfMs.toFixed(1)} ms fra plan, andres ${r.otherMs.toFixed(1)} ms. ` +
+      `${r.samples} målinger.`;
+  }
+  $('status').textContent =
+    `${pings} målinger · ${clicksPlayed} klikk spilt` +
+    (clicksMissed ? ` · ${clicksMissed} kom for sent` : '') +
+    '';
+}, 250);
+
+connect();
+</script>
+</body>
+</html>

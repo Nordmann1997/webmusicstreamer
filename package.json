@@ -1,0 +1,14 @@
+{
+  "name": "musicstreamerweb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Malerigg for felles tidsbase mellom flere enheter i samme rom",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/sync.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
