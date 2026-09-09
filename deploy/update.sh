@@ -4,9 +4,8 @@
 #
 #      bash deploy/update.sh
 #
-#  Erstatter manuell filkopiering. Skriver ut versjonsnummeret til slutt, sa
-#  du kan sammenligne med det som vises nederst pa sida i nettleseren — da vet
-#  du sikkert at enhetene kjorer det du tror de kjorer.
+#  Skriver ut versjonsnummeret til slutt. Sammenlign med det som staar nederst
+#  pa sida i nettleseren — stemmer de, kjorer enheten det du tror.
 # ============================================================================
 set -uo pipefail
 
@@ -19,13 +18,41 @@ if [ ! -d .git ]; then
   exit 1
 fi
 
-echo "Henter oppdateringer..."
-if ! git pull --ff-only; then
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+
+echo "Henter oppdateringer (gren: $BRANCH)..."
+
+# Hent og flett EKSPLISITT mot origin, ikke via upstream-konfigurasjon.
+# `git reset --hard origin/main` flytter grena uten aa sette upstream, sa et
+# bart `git pull` feiler med "no tracking information" — en forvirrende feil
+# som ikke har noe med lokale endringer aa gjore.
+if ! FETCH_ERR="$(git fetch origin "$BRANCH" 2>&1)"; then
   echo
-  echo "git pull feilet. Har du lokale endringer her? Sjekk med:  git status"
-  echo "Vil du kaste dem og folge fjernversjonen:  git reset --hard origin/main"
+  echo "Kunne ikke hente fra origin:"
+  echo "$FETCH_ERR" | sed 's/^/  /'
   exit 1
 fi
+
+if ! MERGE_ERR="$(git merge --ff-only "origin/$BRANCH" 2>&1)"; then
+  echo
+  echo "Kunne ikke oppdatere. Git sier:"
+  echo "$MERGE_ERR" | sed 's/^/  /'
+
+  CHANGED="$(git status --porcelain | grep -v '^??' || true)"
+  if [ -n "$CHANGED" ]; then
+    echo
+    echo "Du har lokale endringer i disse filene:"
+    echo "$CHANGED" | sed 's/^/  /'
+    echo
+    echo "Kaste dem og folge fjernversjonen:"
+    echo "  git reset --hard origin/$BRANCH && bash deploy/update.sh"
+  fi
+  exit 1
+fi
+
+# Sett upstream hvis den mangler, sa vanlig `git pull` ogsa virker heretter.
+git rev-parse --abbrev-ref "$BRANCH@{upstream}" >/dev/null 2>&1 \
+  || git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1
 
 echo "Oppdaterer avhengigheter..."
 npm install --omit=dev --silent
