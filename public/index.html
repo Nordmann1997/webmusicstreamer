@@ -505,7 +505,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.2010';
+const VERSION = '2026-09-09.2045';
 
 const $ = id => document.getElementById(id);
 
@@ -867,6 +867,15 @@ $('shareBtn').onclick = async () => {
     // senderen faktisk kjorer — kalt for start() gjorde den ingenting.
     sendBuffer();
     updateStreamUI();
+
+    // Hva Chrome faktisk ga oss. Naar noe er galt er det nesten alltid her
+    // svaret ligger, og da er det bedre aa lese det enn aa gjette.
+    const tr = sender.stream?.getAudioTracks?.()[0];
+    const st = tr?.getSettings?.() || {};
+    $('shareHint').textContent =
+      `Kilde: ${tr?.label || 'ukjent'} · demping av lokal lyd: ` +
+      `${st.suppressLocalAudioPlayback === true ? 'på' : 'AV — da er det ikke fanelyd'}` +
+      ` · ${st.sampleRate || '?'} Hz`;
   } catch (err) {
     sender = null;
     alert('Kunne ikke dele lyd: ' + err.message);
@@ -990,8 +999,16 @@ setInterval(() => {
   if (sender?.running) {
     const secs = (performance.now() - streamStart) / 1000;
     const kbit = secs > 0 ? (sender.bytesSent * 8 / 1000) / secs : 0;
+    // Nivaaet paa det vi FANGER staar ved siden av baandbredden. Opus paa
+    // 8 kbit/s ser ut som at det virker, men er det enkoderen gir naar den
+    // faar ren stillhet — og da er feilen i delingsdialogen, ikke i koden.
+    const db = sender.inputDb;
+    const inn = db === -Infinity ? 'ingen lyd inn'
+              : db < -60         ? `nesten stille (${db.toFixed(0)} dB)`
+              :                    `inn ${db.toFixed(0)} dB`;
     $('streamState').textContent =
-      `du sender · ${sender.codec === 'opus' ? 'Opus' : 'rå PCM'} · ${kbit.toFixed(0)} kbit/s`;
+      `du sender · ${sender.codec === 'opus' ? 'Opus' : 'rå PCM'} · ` +
+      `${kbit.toFixed(0)} kbit/s · ${inn}`;
   } else if (receiver && receiver.received > 0) {
     const r = receiver;
     const secs = (performance.now() - streamStart) / 1000;

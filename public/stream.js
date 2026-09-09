@@ -278,7 +278,24 @@ export class AudioSender {
     return stream;
   }
 
+  /** Innsignalet i dBFS. -Infinity betyr ren stillhet. */
+  get inputDb() {
+    const p = this.inPeak || 0;
+    return p > 0 ? 20 * Math.log10(p) : -Infinity;
+  }
+
   _onBlock({ t, ch0, ch1 }) {
+    // Maal hva vi FAKTISK fanget, for enkoderen kan glade produsere pakker
+    // av ren stillhet. Opus paa 8 kbit/s betyr ikke at det virker — det
+    // betyr at det ikke er noe lyd aa kode.
+    let peak = 0;
+    for (let i = 0; i < ch0.length; i++) {
+      const a = ch0[i] < 0 ? -ch0[i] : ch0[i];
+      if (a > peak) peak = a;
+    }
+    this.inPeak = Math.max(peak, (this.inPeak || 0) * 0.92);
+    this.blocks = (this.blocks || 0) + 1;
+
     if (!this.running || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.clock.ready) return;              // uten klokke er tidsstempelet verdilost
 
