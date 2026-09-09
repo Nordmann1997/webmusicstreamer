@@ -14,9 +14,6 @@
      nordlyset fortsatt kommer tydelig gjennom. */
   #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
               display: block; z-index: 0; }
-  #bgScrim  { position: fixed; inset: 0; z-index: 1; pointer-events: none;
-              background: rgba(14,17,22,.62); }
-  body > :not(#bgCanvas):not(#bgScrim) { position: relative; z-index: 2; }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -89,12 +86,258 @@
 
   .status { margin-top: 20px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
   code { background: #000; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  /* =======================================================================
+     Forsida — lagt oppaa den gamle maleriggen, som naa bor i utviklerskuffen
+     ======================================================================= */
+  :root {
+    --sky:#ead7bb; --band:#f6edde; --l1:#cfa480; --l2:#8f7691; --l3:#4e4a70;
+    --ink:#45325a; --dim2:#7a6a78; --blobc:#fbf3e2;
+    --accent:#c2744a; --accent-deep:#a95f3a;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0; padding: 0; max-width: none; overflow: hidden;
+    background: var(--sky); color: var(--ink);
+    font: 16px/1.5 ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN",
+          Quicksand, system-ui, -apple-system, sans-serif;
+  }
+  #bgCanvas, #lavaCanvas {
+    position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 0;
+  }
+  /* Lavalampa tegnes i 132 piksler og strekkes av nettleseren: kompositoren
+     gjor skaleringa paa GPU. Gjorde vi det i canvas kostet det ni bilder i
+     sekundet paa retina. */
+  #lavaCanvas { display: none; }
+  body.m-lava #bgCanvas { display: none; }
+  body.m-lava #lavaCanvas { display: block; }
+
+  .mark {
+    position: fixed; z-index: 4; left: 16px; top: max(14px, env(safe-area-inset-top));
+    font-size: 14px; font-weight: 700; color: var(--ink);
+    opacity: 0; transform: translateY(-6px); pointer-events: none;
+    transition: opacity .32s ease, transform .32s ease;
+  }
+  body.hidden .mark { opacity: .85; transform: none; }
+
+  .page {
+    position: relative; z-index: 2; height: 100%;
+    display: grid; grid-template-rows: auto 1fr auto;
+    padding: max(18px, env(safe-area-inset-top)) 20px max(18px, env(safe-area-inset-bottom));
+    max-width: 900px; margin-inline: auto; text-align: center;
+  }
+  header { padding-top: clamp(6px, 3vh, 26px); transition: opacity .32s ease, transform .32s ease; }
+  body.hidden header { opacity: 0; pointer-events: none; transform: translateY(-10px); }
+  h1.wm {
+    margin: 0; font-weight: 800; line-height: 1.05; color: var(--ink);
+    font-size: clamp(28px, 6.6vw, 56px);
+  }
+  .tag { margin-top: 8px; font-size: clamp(13px, 1.9vw, 15px); color: var(--dim2); }
+
+  .middle { display: grid; place-content: center; gap: clamp(16px, 3vh, 28px);
+            transition: opacity .24s ease; }
+  body.hidden .middle { opacity: 0; pointer-events: none; transform: translateY(10px); }
+  body.sharing-help .middle { opacity: 0; pointer-events: none; }
+
+  /* Runde, ikke ovale. Dybden kommer fra lys, ikke fra kant. */
+  .blob {
+    cursor: pointer; font: inherit; font-weight: 700; border: 0; aspect-ratio: 1;
+    border-radius: 54% 46% 50% 50% / 50% 52% 48% 50%;
+    display: grid; place-content: center; gap: 3px; text-align: center;
+    transition: transform .18s cubic-bezier(.2,.9,.3,1.3), box-shadow .18s;
+    margin-inline: auto;
+  }
+  .blob:hover  { transform: translateY(-2px) scale(1.04); }
+  .blob:active { transform: scale(.96); }
+  .blob.primary {
+    width: clamp(168px, 38vw, 236px); font-size: clamp(22px, 4.6vw, 31px); color: #fff6ee;
+    background: radial-gradient(120% 120% at 30% 22%, #d98d5e 0%, var(--accent) 46%, var(--accent-deep) 100%);
+    box-shadow: 0 18px 38px rgba(120,60,35,.34), 0 2px 0 rgba(255,255,255,.28) inset;
+  }
+  .blob.primary .sub2 { font-size: 14px; font-weight: 500; color: rgba(255,246,238,.86); }
+  .blob.secondary {
+    width: clamp(124px, 27vw, 162px); font-size: clamp(14px, 2.6vw, 17px);
+    font-weight: 700; line-height: 1.25; color: var(--accent-deep);
+    background: radial-gradient(120% 120% at 30% 22%, #fff 0%, var(--blobc) 55%, #f3e6d2 100%);
+    border-radius: 48% 52% 54% 46% / 52% 48% 52% 48%;
+    box-shadow: 0 12px 28px rgba(120,60,35,.20), 0 0 0 2px rgba(194,116,74,.30) inset;
+  }
+  .state { font-size: 14px; color: var(--dim2); min-height: 22px;
+           display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #b9a892; }
+  .dot.live { background: #4f9d69; }
+  .dot.warn2 { background: #c98a3a; }
+
+  /* Bunnen ligger paa det morkeste laget og trenger sin egen flate. */
+  .foot {
+    display: grid; gap: 4px; margin-bottom: 4px;
+    background: rgba(251,243,226,.80); backdrop-filter: blur(14px);
+    border-radius: 20px; padding: 12px 16px 10px;
+    box-shadow: 0 8px 26px rgba(50,35,55,.14);
+    opacity: 0; pointer-events: none; transform: translateY(14px);
+    transition: opacity .32s ease, transform .32s ease;
+  }
+  body.timing .foot { opacity: 1; pointer-events: auto; transform: none; }
+  .foot .ftitle { font-size: 14px; line-height: 1.35; color: var(--ink); margin-bottom: 10px; }
+  .foot .lab { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim2); }
+  .foot .lab b { color: var(--ink); font-size: 14px; }
+  .foot input[type=range] { width: 100%; accent-color: var(--accent); height: 24px; }
+  .okbtn {
+    margin-top: 10px; width: 100%; cursor: pointer; font: inherit; font-weight: 700;
+    font-size: 15px; color: #fff6ee; border: 0; border-radius: 14px; padding: 11px 14px;
+    background: linear-gradient(180deg, #cb7f55, var(--accent-deep));
+    box-shadow: 0 8px 18px rgba(120,60,35,.26);
+  }
+
+  /* Hjelpebobla vokser ut av knappene i stedet for aa legge seg over sida. */
+  .bigblob {
+    position: fixed; left: 50%; top: 50%; z-index: 5;
+    width: min(430px, calc(100vw - 32px));
+    transform: translate(-50%, -50%) scale(.22);
+    background: var(--blobc); color: var(--ink);
+    border-radius: 64px 54px 60px 52px; border: 2px solid rgba(78,74,112,.14);
+    padding: 24px 24px 20px; box-shadow: 0 22px 50px rgba(50,35,55,.26);
+    opacity: 0; pointer-events: none; max-height: 82vh; overflow: auto;
+    transition: transform .34s cubic-bezier(.2,.9,.3,1.15), opacity .22s ease;
+  }
+  body.sharing-help .bigblob { opacity: 1; pointer-events: auto;
+                               transform: translate(-50%, -50%) scale(1); }
+  .bigblob h2 { margin: 0 0 10px; font-size: 21px; font-weight: 800; }
+  .bigblob p { margin: 0 0 12px; font-size: 14px; line-height: 1.45; }
+  .bigblob ol { margin: 0 0 12px; padding-left: 20px; font-size: 14px; line-height: 1.5; }
+  .bigblob li { margin-bottom: 7px; }
+  .bigblob .fine2 { font-size: 12.5px; color: var(--dim2); }
+  .warnbox { background: rgba(194,116,74,.14); border: 1px solid rgba(194,116,74,.42);
+             color: var(--accent-deep); border-radius: 14px; padding: 10px 12px;
+             font-size: 13.5px; line-height: 1.4; margin-bottom: 12px; font-weight: 600; }
+  .row2 { display: flex; gap: 8px; margin-top: 4px; }
+  .row2 button { flex: 1; font: inherit; font-weight: 700; font-size: 15px;
+                 border-radius: 16px; padding: 11px 12px; cursor: pointer; border: 0;
+                 margin-top: 0; }
+  .row2 .ghost { background: rgba(78,74,112,.10); color: var(--ink);
+                 border: 1px solid rgba(78,74,112,.20); }
+
+  /* Modusene nede til venstre, Edit nede til hoyre — to hjorner, ingen kollisjon. */
+  #modes { position: fixed; z-index: 4; left: 12px;
+           bottom: max(16px, env(safe-area-inset-bottom)); display: flex; gap: 4px; }
+  #modes button {
+    font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+    padding: 7px 10px; border-radius: 999px; color: var(--ink);
+    background: rgba(251,243,226,.62); border: 1px solid rgba(78,74,112,.16);
+    backdrop-filter: blur(10px); transition: background .15s, color .15s;
+  }
+  #modes button.on { background: var(--accent); color: #fff6ee; border-color: transparent; }
+  body.rave #modes button { background: rgba(20,16,30,.66); color: #f2e9ff;
+                            border-color: rgba(255,255,255,.20); }
+  body.rave #modes button.on { background: var(--accent); color: #fff6ee; }
+  body.rave { background: #07060c; }
+  body.rave .mark { color: #f2e9ff; }
+  body.rave h1.wm, body.rave .tag, body.rave .state { color: #f2e9ff; }
+  body.rave #editBtn, body.rave #devBtn {
+    background: rgba(20,16,30,.72); color: #f2e9ff; border-color: rgba(255,255,255,.22);
+  }
+
+  #editBtn, #devBtn {
+    position: fixed; z-index: 4; background: rgba(251,243,226,.86);
+    border: 1px solid rgba(78,74,112,.20); color: var(--ink); border-radius: 999px;
+    padding: 9px 20px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    box-shadow: 0 8px 22px rgba(50,35,55,.20); backdrop-filter: blur(10px);
+    transition: opacity .32s ease;
+  }
+  #editBtn { right: 12px; bottom: max(16px, env(safe-area-inset-bottom));
+             opacity: 0; pointer-events: none; }
+  body.playing:not(.open) #editBtn { opacity: 1; pointer-events: auto; }
+  #devBtn { right: 12px; top: max(14px, env(safe-area-inset-top)); font-size: 12px; padding: 6px 12px; }
+  body.playing:not(.open) #devBtn { opacity: 0; pointer-events: none; }
+
+  /* Utviklerskuffen: hele den gamle maleriggen, uendret innhold. */
+  #devPanel {
+    position: fixed; z-index: 6; inset: auto 0 0 0; max-height: 88vh; overflow: auto;
+    background: var(--bg); color: var(--fg); border-radius: 16px 16px 0 0;
+    padding: 16px 18px max(18px, env(safe-area-inset-bottom));
+    transform: translateY(101%); transition: transform .26s cubic-bezier(.2,.8,.3,1);
+    box-shadow: 0 -12px 40px rgba(0,0,0,.45);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  #devPanel.on { transform: none; }
+  #devPanel .devInner { max-width: 620px; margin-inline: auto; }
+  .devclose { position: absolute; right: 14px; top: 12px; background: none; border: 0;
+              color: var(--dim); font: inherit; font-size: 13px; cursor: pointer; z-index: 1; }
+
+  /* I liggende format staar knappene ved siden av hverandre. */
+  @media (orientation: landscape) and (min-width: 620px) {
+    .middle { grid-auto-flow: column; align-items: center; gap: 34px; }
+  }
 </style>
 </head>
 <body>
-
 <canvas id="bgCanvas"></canvas>
-<div id="bgScrim"></div>
+<canvas id="lavaCanvas"></canvas>
+
+<div class="mark">WebMultiroom</div>
+
+<div class="page">
+  <header>
+    <h1 class="wm">WebMultiroom</h1>
+    <div class="tag">Transform your and your friends' computers<br>into multiroom speakers</div>
+  </header>
+
+  <div class="middle">
+    <div>
+      <button class="blob primary" id="joinBlob">
+        <span id="joinLabel">Join</span>
+        <span class="sub2" id="joinSub">hear what's playing</span>
+      </button>
+      <div class="state" style="margin-top:14px">
+        <span class="dot" id="dot"></span><span id="stateTxt">Connecting …</span>
+      </div>
+    </div>
+    <button class="blob secondary" id="shareBlob">Share<br>to others</button>
+  </div>
+
+  <div class="foot" id="timingCard">
+    <div class="ftitle">Adjust audio timing if it is off, or if you are connected
+      to a Bluetooth speaker</div>
+    <div class="lab"><span>Earlier</span><span><b id="fineVal">0</b> ms</span><span>Later</span></div>
+    <input type="range" id="fine" min="-150" max="150" step="1" value="0">
+    <button class="okbtn" id="okBtn">Everything OK</button>
+  </div>
+</div>
+
+<div id="shareHelp" class="bigblob">
+  <h2>Share your audio</h2>
+  <div class="warnbox" id="shareWarn" hidden></div>
+  <p>Whatever plays on this computer becomes the stream. Everyone who joins
+     hears the same thing at the same moment.</p>
+  <ol>
+    <li>Pick <b>Chrome Tab</b> in the dialog — not a window, not the whole screen.
+        Only a tab can carry sound.</li>
+    <li>Tick <b>Also share tab audio</b> in the corner of that dialog. It is easy
+        to miss, and without it the stream is silent.</li>
+    <li>Play the music in that tab. Spotify, YouTube, anything.</li>
+  </ol>
+  <p class="fine2">To share sound from an app instead of a tab, route it through a
+     loopback input and pick <b>Audio input</b> in the developer panel.</p>
+  <div class="row2">
+    <button class="ghost" id="shareBack">Back</button>
+    <button class="okbtn" id="shareGo">Choose a tab</button>
+  </div>
+</div>
+
+<div id="modes">
+  <button data-mode="aurora" class="on">Aurora</button>
+  <button data-mode="lava">Lava</button>
+  <button data-mode="bars">Bars</button>
+  <button data-mode="rave">Rave</button>
+</div>
+
+<button id="editBtn">Edit</button>
+<button id="devBtn">Developer</button>
+
+<div id="devPanel">
+  <button class="devclose" id="devClose">Close</button>
+  <div class="devInner">
+
 
 <h1>Synk-målerigg</h1>
 <div class="sub" id="sub">Åpne denne på to enheter. Klikkene skal høres som ett.</div>
@@ -218,6 +461,9 @@
 <div class="status" id="wakeNote"></div>
 <div class="status" id="status">Ikke tilkoblet</div>
 
+  </div>
+</div>
+
 <script type="module">
 import { ClockSync, AudioClockTracker, SyncedPlayer } from './sync.js';
 import { MicMeasurer, FREQ } from './measure.js';
@@ -227,10 +473,10 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.1414';
+const VERSION = '2026-09-09.1620';
 
 const $ = id => document.getElementById(id);
-let visual = null;
+
 const clock = new ClockSync();
 
 let ws, ctx, audioClock, player, measurer, sender, receiver;
@@ -240,6 +486,16 @@ let reconnectTries = 0;
 let pings = 0, clicksPlayed = 0, clicksMissed = 0;
 let myRole = null, peerCount = 0;
 const scheduled = new Set();
+
+// Bakgrunnen starter med sida, ikke med lyden. Den skal staa der og puste for
+// noen har trykket paa noe — ellers ser sida uendret ut til man gjor det.
+// Synken er forsteprioritet: `pressure` leser hvor mange blokker mottakeren
+// har maattet kaste, og bildet gir fra seg rammer hvis det tallet stiger.
+const visual = new AudioVisual($('bgCanvas'), {
+  gain: 0.6, smooth: 0.69, fps: 30,
+  pressure: () => receiver ? receiver.late : 0,
+});
+visual.start(() => ctx ? ctx.currentTime : 0);
 
 // --- Tilkobling ------------------------------------------------------------
 function connect() {
@@ -383,14 +639,7 @@ $('start').onclick = async () => {
   // Bakgrunnen mates av de samme blokkene som spilles, merket med tida de
   // skal spille paa. Da folger bildet den delte tidslinja og ikke maskinas
   // egen — to enheter viser samme bolge i samme oyeblikk.
-  // Synken er forsteprioritet: `pressure` gjor at bildet gir fra seg rammer
-  // hvis lyden begynner aa komme for sent.
-  visual = new AudioVisual($('bgCanvas'), {
-    gain: 0.6, smooth: 0.69, fps: 30,
-    pressure: () => receiver ? receiver.late : 0,
-  });
-  receiver.onblock = (a, b, sr, when) => visual.feed(a, b, sr, when);
-  visual.start(() => ctx.currentTime);
+  receiver.onblock = (a, b, sr, when) => visual?.feed(a, b, sr, when);
 
   keepAwake().then(ok => {
     $('wakeNote').textContent = ok
@@ -732,6 +981,125 @@ setInterval(() => {
 }, 250);
 
 connect();
+// ===========================================================================
+//  Forsida
+// ===========================================================================
+// Knappene her er ikke en ny implementasjon — de trykker paa de samme
+// elementene som maleriggen alltid har brukt. Da kan lyd, synk og maaling
+// vaere uendret, og forsida er ren presentasjon.
+
+let uiJoined = false, uiMuted = false;
+let showControls = true, showTiming = false;
+
+function paintFront() {
+  $('joinLabel').textContent = uiJoined ? (uiMuted ? 'Play' : 'Stop') : 'Join';
+  $('joinSub').textContent   = uiJoined
+    ? (uiMuted ? 'sound is off here' : "you're in sync")
+    : "hear what's playing";
+  $('shareBlob').innerHTML = sender?.running ? 'Stop<br>sharing' : 'Share<br>to others';
+
+  const dot = $('dot'), txt = $('stateTxt');
+  dot.className = 'dot';
+  if (!ws || ws.readyState !== 1) { txt.textContent = 'Not connected'; }
+  else if (sender?.running) { dot.classList.add('live');
+    txt.textContent = `Sharing · ${peerCount} device${peerCount === 1 ? '' : 's'}`; }
+  else if (broadcastActive) { dot.classList.add('live');
+    txt.textContent = `Playing · ${peerCount} device${peerCount === 1 ? '' : 's'} in sync`; }
+  else { dot.classList.add('warn2'); txt.textContent = 'Connected · nobody streaming yet'; }
+
+  const playing = uiJoined;
+  document.body.classList.toggle('playing', playing);
+  document.body.classList.toggle('hidden', playing && !showControls);
+  document.body.classList.toggle('timing', showTiming);
+  document.body.classList.toggle('open', showControls || showTiming);
+  $('editBtn').textContent = (showControls || showTiming) ? 'Done' : 'Edit';
+}
+setInterval(paintFront, 700);
+
+$('joinBlob').onclick = async () => {
+  if (!uiJoined) {
+    // Forste trykk er det samme som «Start lyd» var: brukergesten som
+    // AudioContext trenger for aa faa lov til aa spille.
+    $('start').click();
+    uiJoined = true; uiMuted = false;
+    showControls = false; showTiming = true;      // finjusteringa tar over
+  } else {
+    uiMuted = !uiMuted;
+    $('vol').value = uiMuted ? 0 : 100;
+    $('vol').dispatchEvent(new Event('input'));
+  }
+  paintFront();
+};
+
+// Chrome er ikke en anbefaling: bare Chromium-baserte nettlesere kan ta med
+// lyden fra en fane i getDisplayMedia. Safari og Firefox gir deg bildet og
+// stillhet, uten aa si fra.
+function isChromium() {
+  const b = navigator.userAgentData?.brands;
+  if (b) return b.some(x => /Chromium/i.test(x.brand));
+  return /Chrome\//.test(navigator.userAgent) && !/OPR\/|Edg\//.test(navigator.userAgent);
+}
+
+$('shareBlob').onclick = () => {
+  if (sender?.running) { $('shareBtn').click(); paintFront(); return; }
+  const w = $('shareWarn');
+  if (isChromium()) w.hidden = true;
+  else {
+    w.hidden = false;
+    w.textContent = 'This browser cannot capture tab audio. Open the page in '
+      + 'Chrome to share — joining works fine here.';
+  }
+  document.body.classList.add('sharing-help');
+};
+$('shareBack').onclick = () => document.body.classList.remove('sharing-help');
+$('shareGo').onclick = () => {
+  document.body.classList.remove('sharing-help');
+  if (!ctx) { $('start').click(); uiJoined = true; }
+  $('shareBtn').click();
+  showControls = false; showTiming = true;
+  paintFront();
+};
+
+$('okBtn').onclick = () => { showTiming = false; showControls = false; paintFront(); };
+$('editBtn').onclick = () => {
+  const open = showControls || showTiming;
+  showControls = !open; showTiming = !open;
+  paintFront();
+};
+
+// Finjusteringa foran er den samme skyveren som i maleriggen, bare med
+// mindre utslag. Vi setter verdien og lar den gamle koden gjore jobben.
+$('fine').oninput = (e) => {
+  $('fineVal').textContent = e.target.value;
+  $('nudge').value = e.target.value;
+  $('nudge').dispatchEvent(new Event('input'));
+};
+{
+  const saved = Number($('nudge').value) || 0;
+  if (saved >= -150 && saved <= 150) { $('fine').value = saved; $('fineVal').textContent = saved; }
+}
+
+// --- utviklerskuffen -------------------------------------------------------
+$('devBtn').onclick   = () => $('devPanel').classList.add('on');
+$('devClose').onclick = () => $('devPanel').classList.remove('on');
+
+// --- visuell modus, husket per enhet ---------------------------------------
+let MODE = 'aurora';
+try { MODE = localStorage.getItem('wmMode') || 'aurora'; } catch {}
+function applyMode() {
+  visual.setMode(MODE);
+  document.body.classList.toggle('rave', MODE === 'rave');
+  document.body.classList.toggle('m-lava', MODE === 'lava');
+  document.querySelectorAll('#modes button').forEach(b =>
+    b.classList.toggle('on', b.dataset.mode === MODE));
+}
+document.querySelectorAll('#modes button').forEach(b => b.onclick = () => {
+  MODE = b.dataset.mode;
+  try { localStorage.setItem('wmMode', MODE); } catch {}
+  applyMode();
+});
+applyMode();
+paintFront();
 </script>
 </body>
 </html>
