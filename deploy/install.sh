@@ -132,8 +132,28 @@ fi
 # --- Start -----------------------------------------------------------------
 for L in "$LABEL_SRV" "$LABEL_TUN"; do
   [ -f "$AGENTS/$L.plist" ] || continue
+
+  # bootout er ASYNKRON. Starter vi tjenesten igjen for den gamle er borte,
+  # svarer launchctl "Bootstrap failed: 5: Input/output error" — en feil som
+  # ser ut som noe galt med plist-en, men bare betyr at vi var for raske.
   launchctl bootout "gui/$UID/$L" 2>/dev/null || true
-  launchctl bootstrap "gui/$UID" "$AGENTS/$L.plist"
+  for _ in $(seq 1 50); do
+    launchctl print "gui/$UID/$L" >/dev/null 2>&1 || break
+    sleep 0.2
+  done
+
+  if ! ERR="$(launchctl bootstrap "gui/$UID" "$AGENTS/$L.plist" 2>&1)"; then
+    sleep 2
+    if ! ERR="$(launchctl bootstrap "gui/$UID" "$AGENTS/$L.plist" 2>&1)"; then
+      echo "FEIL: fikk ikke startet $L"
+      echo "$ERR" | sed 's/^/  /'
+      if ! plutil -lint "$AGENTS/$L.plist" >/dev/null 2>&1; then
+        echo "  Plist-en er ugyldig:"
+        plutil -lint "$AGENTS/$L.plist" 2>&1 | sed 's/^/    /'
+      fi
+      exit 1
+    fi
+  fi
   echo "Startet:       $L"
 done
 
