@@ -355,7 +355,9 @@
         Only a tab can carry sound.</li>
     <li>Tick <b>Also share tab audio</b> in the corner of that dialog. It is easy
         to miss, and without it the stream is silent.</li>
-    <li>Play the music in that tab. Spotify, YouTube, anything.</li>
+    <li>Pick the tab that is <b>playing the music</b> — Spotify, YouTube.
+        Not this page: Chrome puts the current tab at the top of the list, and
+        sharing it captures silence.</li>
   </ol>
   <p class="fine2">To share sound from an app instead of a tab, route it through a
      loopback input and pick <b>Audio input</b> in the developer panel.</p>
@@ -522,7 +524,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-10.0910';
+const VERSION = '2026-09-10.0950';
 
 const $ = id => document.getElementById(id);
 
@@ -864,10 +866,16 @@ function reportSilence() {
   const st = tr?.getSettings?.() || {};
   console.log('--- WebMultiroom ---\n' + diagnose());
 
+  // Chrome gir fanelyd og demper den lokalt, men det kommer nuller ut. Da er
+  // fanen som deles ikke den som spiller. Den desidert vanligste varianten er
+  // at man har delt DENNE sida: Chrome setter den ovest i lista, og da demper
+  // den sidas egen utgang og gir oss stillheten tilbake — mens musikken i en
+  // annen fane spiller videre uforstyrret.
   const melding = st.suppressLocalAudioPlayback === true
-    ? 'Kilden er stille. Spilles det faktisk lyd i fanen du delte?'
-    : 'Chrome deler bilde uten lyd. Velg en Chrome-fane og huk av ' +
-      '«Also share tab audio» i dialogen.';
+    ? 'Fanen du delte spiller ingen lyd. Delte du denne sida? Velg fanen '
+      + 'med musikken i stedet — Chrome setter gjerne denne øverst i lista.'
+    : 'Chrome deler bilde uten lyd. Velg en Chrome-fane og huk av '
+      + '«Also share tab audio» i dialogen.';
   $('stateTxt').textContent = melding;
   $('dot').className = 'dot warn2';
   $('shareHint').textContent = melding + ' Full diagnose ligger i konsollen.';
