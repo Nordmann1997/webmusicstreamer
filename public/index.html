@@ -191,6 +191,14 @@
     opacity: 0; pointer-events: none; max-height: 82vh; overflow: auto;
     transition: transform .34s cubic-bezier(.2,.9,.3,1.15), opacity .22s ease;
   }
+  /* Deling er skjult til serveren har sagt ja. Dette er BARE pynt — den
+     ekte sperra staar i server.js, som nekter lydpakker uten nokkel. */
+  body:not(.can-share) #shareBlob,
+  body:not(.can-share) #shareBtn,
+  body:not(.can-share) #shareHint { display: none; }
+  #keyRow { margin-top: 14px; }
+  #keyRow input { width: 100%; padding: 8px; font-size: 14px; }
+
   body.sharing-help #shareHelp,
   body.asking      #syncBox { opacity: 1; pointer-events: auto;
                               transform: translate(-50%, -50%) scale(1); }
@@ -423,6 +431,12 @@
   <select id="inputDev" hidden style="width:100%;margin-top:8px"></select>
   <button id="showNames" hidden>Vis enhetsnavn (krever mikrofontilgang)</button>
 
+  <div id="keyRow">
+    <span class="dim">Delingsnokkel</span>
+    <input id="shareKey" type="password" placeholder="lim inn nokkelen" autocomplete="off">
+    <div class="hint" id="keyHint"></div>
+  </div>
+
   <button id="shareBtn">Del lyden fra denne maskinen</button>
 
   <div class="hint" id="shareHint"></div>
@@ -528,9 +542,28 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-10.1105';
+const VERSION = '2026-09-10.1720';
 
 const $ = id => document.getElementById(id);
+
+// --- Delingsnokkel ---------------------------------------------------------
+// Kommer enten i lenka (#k=...) eller skrives inn i utviklerskuffen, og lagres
+// lokalt saa den bare trengs en gang per enhet.
+//
+// Hash-en fjernes fra adresselinja med det samme. Ellers ville nokkelen blitt
+// med hver gang DU kopierer adressen fra din egen nettleser og sender den til
+// noen — og da er hele sperra borte uten at du merket det.
+let shareLocked = false, shareKey = '';
+{
+  const m = location.hash.match(/[#&]k=([^&]+)/);
+  if (m) {
+    shareKey = decodeURIComponent(m[1]);
+    try { localStorage.setItem('mr_key', shareKey); } catch {}
+    history.replaceState(null, '', location.pathname + location.search);
+  } else {
+    try { shareKey = localStorage.getItem('mr_key') || ''; } catch {}
+  }
+}
 
 const clock = new ClockSync();
 
@@ -564,6 +597,10 @@ function connect() {
 
   ws.onopen = () => {
     reconnectTries = 0;
+    // Nokkelen sendes med en gang, saa retten til aa dele ogsaa overlever en
+    // gjenoppkobling — ellers ville en kort nettglipp tatt fra deg knappen
+    // midt i en avspilling.
+    if (shareKey) ws.send(JSON.stringify({ type: 'auth', key: shareKey }));
     $('status').textContent = 'Tilkoblet — måler klokke...';
 
     // Serveren teller takter fra 0 hver gang den starter. Husket vi ID-ene fra
@@ -596,6 +633,19 @@ function connect() {
     if (ev.data instanceof ArrayBuffer) { receiver?.onPacket(ev.data); return; }
 
     const msg = JSON.parse(ev.data);
+
+    if (msg.type === 'sharegate') {
+      shareLocked = msg.locked;
+      document.body.classList.toggle('can-share', msg.ok);
+      if (msg.locked && !msg.ok && shareKey) {
+        $('keyHint').textContent = 'Feil nokkel.';
+        localStorage.removeItem('mr_key'); shareKey = '';
+      } else if (msg.ok && msg.locked) {
+        $('keyHint').textContent = 'Laast opp paa denne enheten.';
+      }
+      paintFront();
+      return;
+    }
 
     if (msg.type === 'buffer') {
       // Senderen eier verdien. Vi folger den, og viser den i panelet slik at
@@ -929,6 +979,15 @@ function updateStreamUI() {
         'velg en annen utgang over — å skru ned volumet demper begge to.';
   }
 }
+
+$('shareKey').onchange = () => {
+  shareKey = $('shareKey').value.trim();
+  try { shareKey ? localStorage.setItem('mr_key', shareKey)
+                 : localStorage.removeItem('mr_key'); } catch {}
+  $('keyHint').textContent = 'Sjekker ...';
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'auth', key: shareKey }));
+  else $('keyHint').textContent = 'Ikke tilkoblet — provd igjen naar linja er oppe.';
+};
 
 $('shareBtn').onclick = async () => {
   if (!ctx) { alert('Trykk "Start lyd" først.'); return; }

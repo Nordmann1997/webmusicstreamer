@@ -60,6 +60,14 @@ const clients = new Set();
 // kobler fra — ellers ville to sendere blandet lyd hos lytterne.
 let bufferMs = null;      // felles avspillingsforsinkelse, eid av senderen
 let broadcaster = null;
+
+// Nokkel for aa faa lov til aa dele. Tom = aapent for alle, som for.
+// Settes som miljovariabel av deploy/install.sh, som leser den fra
+// ~/.musicstreamerweb-key — utenfor repoet, saa den overlever git pull.
+//
+// Dette er den ekte sperra. Aa skjule knappen i nettleseren stopper ingen som
+// aapner utviklerverktoyet; serveren maa nekte selve lydpakkene.
+const SHARE_KEY = process.env.SHARE_KEY || '';
 let audioPackets = 0;
 
 // Del ut den rollen som er minst brukt blant dem som faktisk er tilkoblet.
@@ -83,6 +91,9 @@ wss.on('connection', (ws) => {
   console.log(`Klient koblet til som rolle ${ws.role} (${clients.size} totalt)`);
   ws.send(JSON.stringify({ type: 'role', role: ws.role }));
   if (broadcaster) ws.send(JSON.stringify({ type: 'broadcast', active: true }));
+  // Uten nokkel er alle sendere, som for. Med nokkel maa klienten sporre.
+  ws.mayShare = !SHARE_KEY;
+  ws.send(JSON.stringify({ type: 'sharegate', locked: !!SHARE_KEY, ok: !SHARE_KEY }));
   // Bufferet MAA vaere likt paa alle. Har den ene 400 ms og den andre 1000,
   // spiller de noyaktig 600 ms fra hverandre, og alt annet ser riktig ut.
   // Derfor eier senderen verdien, og den som kommer sent faar den med en gang.
@@ -99,6 +110,7 @@ wss.on('connection', (ws) => {
     // regner selv om til sin egen lydklokke.
     if (isBinary) {
       if (!broadcaster) {
+        if (SHARE_KEY && !ws.mayShare) return;   // ingen nokkel, ingen deling
         broadcaster = ws;
         console.log('Sender startet');
         broadcast({ type: 'broadcast', active: true });
@@ -114,7 +126,17 @@ wss.on('connection', (ws) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
-    if (msg.type === 'ping') {
+    if (msg.type === 'auth') {
+      // Fem forsok per tilkobling. Den som vil gjette maa koble til paa nytt
+      // for hvert femte forsok, og da er det ikke lenger noen snarvei.
+      ws.authTries = (ws.authTries || 0) + 1;
+      if (ws.authTries <= 5) {
+        ws.mayShare = !SHARE_KEY ||
+          (typeof msg.key === 'string' && msg.key === SHARE_KEY);
+      }
+      ws.send(JSON.stringify({ type: 'sharegate', locked: !!SHARE_KEY, ok: !!ws.mayShare }));
+
+    } else if (msg.type === 'ping') {
       // t1 sendes uendret tilbake sa klienten slipper a holde styr paa den.
       ws.send(JSON.stringify({ type: 'pong', t1: msg.t1, t2, t3: now() }));
 

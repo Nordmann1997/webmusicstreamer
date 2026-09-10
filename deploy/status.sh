@@ -81,6 +81,17 @@ else
 fi
 line
 
+# --- Deling ----------------------------------------------------------------
+KEY_FILE="$HOME/.musicstreamerweb-key"
+if [ -f "$KEY_FILE" ]; then
+  echo "Deling:                             laast med nokkel"
+  [ -n "$TUNNEL_HOST" ] && echo "  din lenke: https://$TUNNEL_HOST/#k=$(cat "$KEY_FILE")"
+  echo "  (slett $KEY_FILE og kjor install.sh paa nytt for aa apne for alle)"
+else
+  echo "Deling:                             APEN — alle med lenka kan dele"
+fi
+line
+
 # --- Koden -----------------------------------------------------------------
 VER="$(grep -o "const VERSION = '[^']*'" public/index.html 2>/dev/null | head -1 | cut -d\' -f2)"
 echo "Versjon paa disk:                   ${VER:-ukjent}"

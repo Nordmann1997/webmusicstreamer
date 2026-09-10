@@ -22,6 +22,17 @@ PORT="${PORT:-8080}"
 TUNNEL_NAME=""; TUNNEL_HOST=""
 [ -f "$DIR/deploy/tunnel.conf" ] && . "$DIR/deploy/tunnel.conf"
 
+# --- Delingsnokkelen -------------------------------------------------------
+# Ligger UTENFOR repoet, saa den overlever git pull og aldri havner i git.
+# Uten den er sida aapen for alle som har lenka — det er slik det var for.
+KEY_FILE="$HOME/.musicstreamerweb-key"
+if [ ! -f "$KEY_FILE" ]; then
+  LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 12 > "$KEY_FILE"
+  chmod 600 "$KEY_FILE"
+  echo "Laget ny delingsnokkel i $KEY_FILE"
+fi
+SHARE_KEY="$(cat "$KEY_FILE")"
+
 echo "Prosjektmappe: $DIR"
 
 # --- Node ------------------------------------------------------------------
@@ -64,7 +75,10 @@ cat > "$AGENTS/$LABEL_SRV.plist" <<PLIST
   </array>
   <key>WorkingDirectory</key><string>$DIR</string>
   <key>EnvironmentVariables</key>
-  <dict><key>PORT</key><string>$PORT</string></dict>
+  <dict>
+    <key>PORT</key><string>$PORT</string>
+    <key>SHARE_KEY</key><string>$SHARE_KEY</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$DIR/logs/server.log</string>
@@ -192,6 +206,13 @@ if [ "$TUN_MODE" = "navngitt" ]; then
     echo "   ADRESSE:  https://$TUNNEL_HOST"
     echo
     echo "Fast adresse — den samme etter omstart. Apne den paa alle enhetene."
+    echo
+    echo "   DIN LENKE (gir rett til aa dele — ikke send denne videre):"
+    echo "   https://$TUNNEL_HOST/#k=$SHARE_KEY"
+    echo
+    echo "Apne den EN gang paa maskinene dine; nokkelen huskes lokalt. Alle"
+    echo "andre far adressen uten #k og kan bare lytte."
+
   else
     echo
     echo "Adressen svarte ikke (siste svar: ${CODE:-ingen})."
