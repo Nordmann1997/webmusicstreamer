@@ -278,6 +278,15 @@
   }
   #devPanel.on { transform: none; }
   #devPanel .devInner { max-width: 620px; margin-inline: auto; }
+  .diagbox { background: var(--panel); border: 1px solid var(--line);
+             border-radius: 12px; padding: 12px 14px; margin: 16px 0; }
+  .diagbox pre { margin: 8px 0 0; font: 12px/1.5 ui-monospace, SFMono-Regular,
+                 Menlo, monospace; color: var(--fg); white-space: pre-wrap;
+                 word-break: break-word; }
+  .mini { background: #2b2138; color: #efe6dc; border: 1px solid #3a2e4c;
+          border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 12px;
+          cursor: pointer; }
+
   .devclose { position: absolute; right: 14px; top: 12px; background: none; border: 0;
               color: var(--dim); font: inherit; font-size: 13px; cursor: pointer; z-index: 1; }
 
@@ -490,6 +499,14 @@
   </div>
 </div>
 
+<div class="diagbox">
+  <label class="row">
+    <span><strong>Diagnose</strong></span>
+    <span><button id="diagCopy" class="mini">Kopier</button></span>
+  </label>
+  <pre id="diag">—</pre>
+</div>
+
 <div class="status" id="wakeNote"></div>
 <div class="status" id="status">Ikke tilkoblet</div>
 
@@ -505,7 +522,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.2130';
+const VERSION = '2026-09-10.0910';
 
 const $ = id => document.getElementById(id);
 
@@ -822,22 +839,30 @@ $('outDev').onchange = async () => {
 
 /** Delinga gaar, men det kommer ingen lyd inn. Si det tydelig, og legg hele
  *  diagnosen i konsollen slik at den kan kopieres rett ut. */
+/** Alt som trengs for aa se hvor lyden blir av, som ren tekst. */
+function diagnose() {
+  const tr = sender?.stream?.getAudioTracks?.()[0];
+  const st = tr?.getSettings?.() || {};
+  return [
+    `versjon        ${VERSION}`,
+    `deler          ${sender?.running ? 'ja' : 'nei'}`,
+    `kilde          ${tr?.label || '—'}`,
+    `spor           ${tr ? tr.readyState : '—'} · muted ${tr ? tr.muted : '—'}`,
+    `demping lokalt ${tr ? (st.suppressLocalAudioPlayback === true ? 'på' : 'AV') : '—'}`,
+    `kanaler        ${st.channelCount ?? '?'} · ${st.sampleRate ?? '?'} Hz`,
+    `blokker fanget ${sender?.blocks ?? 0}`,
+    `nivaa inn      ${!sender ? '—' : sender.inputDb === -Infinity ? '-inf' : sender.inputDb.toFixed(1)} dBFS`,
+    `kodek          ${sender?.codec ?? '—'} · ${sender?.bytesSent ?? 0} byte sendt`,
+    `mottatt        ${receiver?.received ?? 0} · spilt ${receiver?.played ?? 0} · forsent ${receiver?.late ?? 0}`,
+    `lydklokke      ${audioClock?.ready ? 'klar' : 'ikke klar'} · brudd ${audioClock?.resets ?? '—'}`,
+    `klokke         ${clock.ready ? 'klar' : 'ikke klar'} · buffer ${receiver?.bufferMs ?? '—'} ms`,
+  ].join('\n');
+}
+
 function reportSilence() {
   const tr = sender?.stream?.getAudioTracks?.()[0];
   const st = tr?.getSettings?.() || {};
-  const linjer = [
-    `versjon        ${VERSION}`,
-    `kilde          ${tr?.label || 'ukjent'}`,
-    `spor aktivt    ${tr ? tr.readyState : '—'} · muted ${tr ? tr.muted : '—'}`,
-    `demping lokalt ${st.suppressLocalAudioPlayback === true ? 'på' : 'AV'}`,
-    `kanaler        ${st.channelCount ?? '?'} · ${st.sampleRate ?? '?'} Hz`,
-    `blokker fanget ${sender.blocks}`,
-    `nivaa inn      ${sender.inputDb === -Infinity ? '-inf' : sender.inputDb.toFixed(1)} dBFS`,
-    `kodek          ${sender.codec} · ${sender.bytesSent} byte sendt`,
-    `lydklokke      ${audioClock?.ready ? 'klar' : 'ikke klar'} · brudd ${audioClock?.resets ?? '—'}`,
-    `klokke         ${clock.ready ? 'klar' : 'ikke klar'}`,
-  ].join('\n');
-  console.log('--- WebMultiroom: stille deling ---\n' + linjer);
+  console.log('--- WebMultiroom ---\n' + diagnose());
 
   const melding = st.suppressLocalAudioPlayback === true
     ? 'Kilden er stille. Spilles det faktisk lyd i fanen du delte?'
@@ -1140,6 +1165,12 @@ function paintFront() {
   $('editBtn').textContent = (showControls || showTiming) ? 'Done' : 'Edit';
 }
 setInterval(paintFront, 700);
+setInterval(() => { $('diag').textContent = diagnose(); }, 700);
+$('diagCopy').onclick = async () => {
+  try { await navigator.clipboard.writeText(diagnose()); $('diagCopy').textContent = 'Kopiert'; }
+  catch { $('diagCopy').textContent = 'Merk teksten og kopier'; }
+  setTimeout(() => { $('diagCopy').textContent = 'Kopier'; }, 2000);
+};
 
 $('joinBlob').onclick = async () => {
   if (!uiJoined) {
