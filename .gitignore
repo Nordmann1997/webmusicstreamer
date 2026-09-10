@@ -2,3 +2,4 @@ node_modules/
 logs/
 .DS_Store
 _utdatert/
+_to_delete/

@@ -6,6 +6,9 @@
 #
 #  Etter dette starter serveren av seg selv ved oppstart, kommer opp igjen
 #  hvis den krasjer, og holder maskinen vaken sa lenge den korer.
+#
+#  Tunnelen kjores navngitt (fast adresse) hvis deploy/tunnel-setup.sh er
+#  kjort. Er den ikke det, brukes en hurtigtunnel med tilfeldig adresse.
 # ============================================================================
 set -e
 
@@ -15,6 +18,9 @@ AGENTS="$HOME/Library/LaunchAgents"
 LABEL_SRV="no.musicstreamerweb.server"
 LABEL_TUN="no.musicstreamerweb.tunnel"
 PORT="${PORT:-8080}"
+
+TUNNEL_NAME=""; TUNNEL_HOST=""
+[ -f "$DIR/deploy/tunnel.conf" ] && . "$DIR/deploy/tunnel.conf"
 
 echo "Prosjektmappe: $DIR"
 
@@ -68,8 +74,34 @@ cat > "$AGENTS/$LABEL_SRV.plist" <<PLIST
 PLIST
 
 # --- Tunnelen --------------------------------------------------------------
+# To moduser:
+#   navngitt  — fast adresse, krever ~/.cloudflared/<navn>.yml fra
+#               deploy/tunnel-setup.sh
+#   hurtig    — ny tilfeldig trycloudflare-adresse ved hver omstart
+TUN_MODE="ingen"
+CFG=""
+[ -n "$TUNNEL_NAME" ] && CFG="$HOME/.cloudflared/$TUNNEL_NAME.yml"
+
 if command -v cloudflared >/dev/null 2>&1; then
   CF_BIN="$(command -v cloudflared)"
+
+  if [ -n "$CFG" ] && [ -f "$CFG" ]; then
+    TUN_MODE="navngitt"
+    # --no-autoupdate: en autooppdatering midt i en okt starter cloudflared
+    # pa nytt og river tunnelen. Vi oppdaterer heller med brew naar det passer.
+    TUN_ARGS="    <string>--config</string>
+    <string>$CFG</string>
+    <string>--no-autoupdate</string>
+    <string>tunnel</string>
+    <string>run</string>
+    <string>$TUNNEL_NAME</string>"
+  else
+    TUN_MODE="hurtig"
+    TUN_ARGS="    <string>tunnel</string>
+    <string>--url</string>
+    <string>http://localhost:$PORT</string>"
+  fi
+
   cat > "$AGENTS/$LABEL_TUN.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -80,9 +112,7 @@ if command -v cloudflared >/dev/null 2>&1; then
   <key>ProgramArguments</key>
   <array>
     <string>$CF_BIN</string>
-    <string>tunnel</string>
-    <string>--url</string>
-    <string>http://localhost:$PORT</string>
+$TUN_ARGS
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -91,7 +121,9 @@ if command -v cloudflared >/dev/null 2>&1; then
 </dict>
 </plist>
 PLIST
-  echo "cloudflared:   $CF_BIN"
+  echo "cloudflared:   $CF_BIN ($TUN_MODE tunnel)"
+  [ "$TUN_MODE" = "hurtig" ] && [ -n "$TUNNEL_HOST" ] && \
+    echo "               Vil du ha https://$TUNNEL_HOST: bash deploy/tunnel-setup.sh"
 else
   echo "cloudflared:   IKKE installert — hopper over tunnelen."
   echo "               Installer med:  brew install cloudflared"
@@ -124,7 +156,33 @@ else
 fi
 
 # --- Tunneladressen --------------------------------------------------------
-if [ -f "$AGENTS/$LABEL_TUN.plist" ]; then
+if [ "$TUN_MODE" = "navngitt" ]; then
+  echo
+  printf "Venter pa at https://$TUNNEL_HOST svarer"
+  UP=0
+  for _ in $(seq 1 45); do
+    CODE="$(curl -s -o /dev/null -m 4 -w '%{http_code}' "https://$TUNNEL_HOST/" 2>/dev/null)"
+    if [ "$CODE" = "200" ]; then UP=1; break; fi
+    printf "."
+    sleep 2
+  done
+  echo
+  if [ "$UP" -eq 1 ]; then
+    echo
+    echo "   ADRESSE:  https://$TUNNEL_HOST"
+    echo
+    echo "Fast adresse — den samme etter omstart. Apne den paa alle enhetene."
+  else
+    echo
+    echo "Adressen svarte ikke (siste svar: ${CODE:-ingen})."
+    echo "  530 / 1033  = tunnelen korer ikke. Se: tail -20 $DIR/logs/tunnel.log"
+    echo "  navneoppslag feiler = DNS har ikke rukket aa spre seg enna, vent litt"
+    echo "  404         = ingress i ~/.cloudflared/$TUNNEL_NAME.yml peker feil"
+    echo
+    echo "  Serveren virker uansett lokalt: http://localhost:$PORT"
+  fi
+
+elif [ "$TUN_MODE" = "hurtig" ]; then
   echo
   printf "Venter pa adressen fra tunnelen"
   URL=""

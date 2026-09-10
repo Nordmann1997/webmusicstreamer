@@ -13,6 +13,9 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR" || exit 1
 PORT="${PORT:-8080}"
 
+TUNNEL_NAME=""; TUNNEL_HOST=""
+[ -f deploy/tunnel.conf ] && . deploy/tunnel.conf
+
 # Uten denne kan tunnelen kore uten aa skrive loggen — og da er den
 # offentlige adressen usynlig, selv om alt egentlig virker.
 mkdir -p logs
@@ -46,12 +49,35 @@ else
 fi
 
 # --- Tunneladressen --------------------------------------------------------
-URL="$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' logs/tunnel.log 2>/dev/null | tail -1)"
-if [ -n "$URL" ]; then
-  echo "Tunneladresse:                      $URL"
-  echo "  (ny ved hver omstart av tunnelen — bruk alltid den siste)"
+# Modusen leses av plist-en som faktisk korer, ikke av hva vi haper er satt
+# opp — det er den eneste kilden som ikke kan lyve.
+PLIST="$HOME/Library/LaunchAgents/no.musicstreamerweb.tunnel.plist"
+if grep -q '<string>run</string>' "$PLIST" 2>/dev/null; then
+  echo "Tunnelmodus:                        navngitt (fast adresse)"
+  if [ -n "$TUNNEL_HOST" ]; then
+    CODE="$(curl -s -o /dev/null -m 8 -w '%{http_code}' "https://$TUNNEL_HOST/" 2>/dev/null)"
+    case "$CODE" in
+      200) echo "https://$TUNNEL_HOST                svarer" ;;
+      000) echo "https://$TUNNEL_HOST                NAR IKKE FREM (DNS eller nett)" ;;
+      530|502|503)
+           echo "https://$TUNNEL_HOST                SVARER $CODE — tunnelen korer ikke"
+           echo "  → tail -20 logs/tunnel.log" ;;
+      *)   echo "https://$TUNNEL_HOST                svarer $CODE" ;;
+    esac
+  fi
+  CFG="$HOME/.cloudflared/$TUNNEL_NAME.yml"
+  [ -f "$CFG" ] || echo "  ADVARSEL: $CFG mangler — kjor: bash deploy/tunnel-setup.sh"
 else
-  echo "Tunneladresse:                      ikke funnet i logs/tunnel.log"
+  echo "Tunnelmodus:                        hurtig (tilfeldig adresse)"
+  URL="$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' logs/tunnel.log 2>/dev/null | tail -1)"
+  if [ -n "$URL" ]; then
+    echo "Tunneladresse:                      $URL"
+    echo "  (ny ved hver omstart av tunnelen — bruk alltid den siste)"
+  else
+    echo "Tunneladresse:                      ikke funnet i logs/tunnel.log"
+  fi
+  [ -n "$TUNNEL_HOST" ] && \
+    echo "  → fast adresse https://$TUNNEL_HOST: bash deploy/tunnel-setup.sh"
 fi
 line
 

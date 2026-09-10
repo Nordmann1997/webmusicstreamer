@@ -39,26 +39,89 @@ Etter dette:
 
 ## Adressen
 
-`cloudflared tunnel --url` gir en gratis adresse på `trycloudflare.com`, men
-**den endrer seg hver gang tunnelen starter på nytt**. Greit for testing.
+Uten oppsett kjører tunnelen i **hurtigmodus**: `cloudflared tunnel --url`
+gir en gratis adresse på `trycloudflare.com`. Den er grei til testing, men har
+to problemer: den endrer seg hver gang tunnelen starter på nytt, og hele
+`trycloudflare.com` er svartelistet hos flere mobiloperatører (Telenor
+Nettvern blokkerer den som «utrygg nettside») fordi domenet misbrukes til
+svindel.
 
-Vil du ha en fast adresse, trenger du et domene lagt inn i Cloudflare:
+### Fast adresse: multiroom.jwk.no
+
+En **navngitt tunnel** fikser begge deler. Den bruker et domene du eier, så
+adressen står stille og ingen filtrerer den.
+
+**1. Legg `jwk.no` inn i Cloudflare** (gratisplanen holder)
+
+Cloudflare må være autoritativ for domenet — det er ikke nok å ha en konto.
+
+- Opprett konto på cloudflare.com, velg *Add a site*, skriv `jwk.no`, velg Free.
+- Cloudflare skanner dagens DNS og viser en liste med importerte oppføringer.
+  **Gå gjennom lista mot Domeneshop før du fortsetter.** Sammenlign med
+  DNS-oversikten i Domeneshop-panelet, oppføring for oppføring. Skanningen
+  tar det den finner, og den finner ikke alt: navn som ikke er vanlige
+  (`mail`, `autodiscover`, verifikasjonsposter) kan mangle. Mangler noe,
+  legg det inn manuelt nå.
+- Særlig viktig: **MX-oppføringer og TXT/SPF/DKIM**. Mister du dem, slutter
+  e-post på domenet å virke — det er den vanligste smellen ved flytting.
+- Sett hjemmesidas oppføringer til «DNS only» (grå sky) hvis du er usikker på
+  om den tåler å ligge bak Cloudflares proxy. Det kan skrus på senere.
+
+**2. Bytt navnetjenere hos Domeneshop**
+
+Cloudflare gir deg to navnetjenere (`xxx.ns.cloudflare.com`). I
+Domeneshop: domenet → *Navnetjenere* → bytt fra Domeneshops egne til de to
+fra Cloudflare.
+
+Hjemmesida fortsetter å virke gjennom hele byttet, så lenge oppføringene i
+steg 1 stemmer — det er de samme svarene, bare fra en annen server. Regn med
+alt fra noen minutter til noen timer før det har spredd seg. Cloudflare sender
+e-post når domenet er aktivt.
+
+**3. Sett opp tunnelen på Mini-en**
 
 ```bash
-cloudflared tunnel login
-cloudflared tunnel create musicstreamer
-cloudflared tunnel route dns musicstreamer lyd.dittdomene.no
+cd ~/musicstreamermacmini
+git pull
+bash deploy/tunnel-setup.sh    # én gang
+bash deploy/install.sh
 ```
 
-Bytt så ut `--url http://localhost:8080` i
-`~/Library/LaunchAgents/no.musicstreamerweb.tunnel.plist` med
-`run musicstreamer`, og last tjenesten på nytt.
+`tunnel-setup.sh` logger deg inn (nettleseren åpner seg — velg `jwk.no` i
+lista), lager tunnelen, peker `multiroom.jwk.no` på den, og skriver
+`~/.cloudflared/musicstreamer.yml`. `install.sh` oppdager konfigurasjonen og
+starter tjenesten i navngitt modus i stedet for hurtigmodus.
+
+Adressen står i `deploy/tunnel.conf`. Vil du ha en annen, endre den der og
+kjør `tunnel-setup.sh` på nytt.
+
+### Hvorfor et subdomene og ikke jwk.no/webmultiroom
+
+En underkatalog ville krevd tre endringer i koden: WebSocket-en kobler til
+roten (`wss://<vert>/`), `server.js` bygger filstier rett fra URL-en, og
+`index.html` importerer moduler relativt (`./sync.js`) — som peker feil hvis
+adressen mangler skråstrek på slutten. Subdomenet krever null kodeendringer:
+én DNS-oppføring og én ingress-regel.
+
+Vil du likevel ha en inngang fra hjemmesida, legg en lenke til
+`https://multiroom.jwk.no` på `jwk.no/webmultiroom`.
+
+### Nøkkelen
+
+`tunnel-setup.sh` legger `cert.pem` og `<uuid>.json` i `~/.cloudflared/` på
+Mini-en. De skal **aldri** inn i git — `<uuid>.json` er nøkkelen som lar
+hvem som helst kjøre tunnelen din. `reset.sh` rører dem ikke.
+
+Flytter du til en annen maskin, kjør `tunnel-setup.sh` der. Finnes tunnelen
+allerede uten at nøkkelen ligger lokalt, sier skriptet fra hvordan du lager
+den på nytt.
 
 ## Når noe skurrer
 
 ```bash
-bash deploy/status.sh     # tjenester, adresse, versjon, om repoet er bak
-bash deploy/reset.sh      # full opprydding og ny installasjon
+bash deploy/status.sh        # tjenester, adresse, versjon, om repoet er bak
+bash deploy/reset.sh         # full opprydding og ny installasjon
+bash deploy/tunnel-setup.sh  # sette opp / reparere den faste adressen
 ```
 
 `reset.sh` stopper og fjerner begge tjenestene, dreper løsrevne
@@ -66,7 +129,22 @@ bash deploy/reset.sh      # full opprydding og ny installasjon
 kode og installerer på nytt. Bruk den når du er usikker på hva som står igjen
 fra tidligere forsøk.
 
-### Ingen adresse fra tunnelen
+### Adressen svarer 530 eller «Error 1033»
+
+Cloudflare fant ingen tunnel bak navnet. Enten kjører ikke `cloudflared` på
+Mini-en, eller så peker DNS-oppføringen på en tunnel som ikke finnes lenger
+(typisk hvis tunnelen er slettet og laget på nytt). Sjekk:
+
+```bash
+bash deploy/status.sh
+tail -20 logs/tunnel.log
+cloudflared tunnel list
+```
+
+Stemmer ikke id-en i `~/.cloudflared/musicstreamer.yml` med den i lista, kjør
+`bash deploy/tunnel-setup.sh` på nytt.
+
+### Ingen adresse fra hurtigtunnelen
 
 `trycloudflare` er en gratis best-effort-tjeneste uten oppetidsgaranti, og den
 er ratebegrenset per IP. Henger `cloudflared` på «Requesting new quick Tunnel»,

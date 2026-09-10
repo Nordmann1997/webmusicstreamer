@@ -16,6 +16,9 @@ cd "$DIR" || exit 1
 AGENTS="$HOME/Library/LaunchAgents"
 PORT="${PORT:-8080}"
 
+TUNNEL_NAME=""; TUNNEL_HOST=""
+[ -f deploy/tunnel.conf ] && . deploy/tunnel.conf
+
 echo "Rydder opp i: $DIR"
 echo
 
@@ -38,14 +41,22 @@ done
 # --- 2. Losrevne cloudflared-prosesser ------------------------------------
 # Manuelle forsok i et terminalvindu lever videre og holder pa hver sin
 # tunnel. Vi treffer bare de som peker paa VAR port.
-STRAY="$(pgrep -f "cloudflared tunnel --url http://localhost:$PORT" 2>/dev/null | tr '\n' ' ')"
-if [ -n "${STRAY// /}" ]; then
-  echo "  dreper losrevne cloudflared: $STRAY"
-  pkill -f "cloudflared tunnel --url http://localhost:$PORT" 2>/dev/null
-  sleep 2
-else
-  echo "  ingen losrevne cloudflared-prosesser"
-fi
+# To former: hurtigtunnel (--url) og navngitt tunnel (tunnel run <navn>).
+PATTERNS=("cloudflared tunnel --url http://localhost:$PORT")
+[ -n "$TUNNEL_NAME" ] && PATTERNS+=("cloudflared.*tunnel run $TUNNEL_NAME")
+FOUND=0
+for PAT in "${PATTERNS[@]}"; do
+  STRAY="$(pgrep -f "$PAT" 2>/dev/null | tr '\n' ' ')"
+  if [ -n "${STRAY// /}" ]; then
+    echo "  dreper losrevne cloudflared: $STRAY"
+    pkill -f "$PAT" 2>/dev/null
+    FOUND=1
+  fi
+done
+[ "$FOUND" -eq 1 ] && sleep 2
+[ "$FOUND" -eq 0 ] && echo "  ingen losrevne cloudflared-prosesser"
+# Nokkel og config i ~/.cloudflared rores ikke — de er hele poenget med
+# den faste adressen, og maa overleve en reset.
 
 # --- 3. Logger -------------------------------------------------------------
 mkdir -p logs
