@@ -263,7 +263,11 @@
   }
   #editBtn { right: 12px; bottom: max(16px, env(safe-area-inset-bottom));
              opacity: 0; pointer-events: none; }
-  body.playing:not(.open) #editBtn { opacity: 1; pointer-events: auto; }
+  /* Edit skal ogsaa kunne LUKKE. Foer skjulte den seg saa snart kontrollene
+     var framme, og da fantes det ingen vei tilbake til den rene sida. */
+  body.playing #editBtn { opacity: 1; pointer-events: auto; }
+  /* Naar en boks staar der eier den valget; Edit ville bare vaert stoy. */
+  body.asking #editBtn, body.sharing-help #editBtn { opacity: 0; pointer-events: none; }
   #devBtn { right: 12px; top: max(14px, env(safe-area-inset-top)); font-size: 12px; padding: 6px 12px; }
   body.playing:not(.open) #devBtn { opacity: 0; pointer-events: none; }
 
@@ -524,7 +528,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-10.0950';
+const VERSION = '2026-09-10.1105';
 
 const $ = id => document.getElementById(id);
 
@@ -536,6 +540,7 @@ let streamStart = performance.now();
 let silentFor = 0;
 let reconnectTries = 0;
 let pings = 0, clicksPlayed = 0, clicksMissed = 0;
+let pingFast = null, pingSlow = null;
 let myRole = null, peerCount = 0;
 const scheduled = new Set();
 
@@ -566,12 +571,21 @@ function connect() {
     // klienten ingenting igjen, uten at noe ser galt ut.
     scheduled.clear();
     receiver?.timeline.reset();
+
+    // Serveren teller fra null hver gang den starter. Uten dette blir gamle
+    // malinger liggende og odelegge i to minutter etter en omstart — det er
+    // nettopp den situasjonen der man ender med aa laste sida paa nytt.
+    clock.reset();
     // Rask serie forst sa estimatet konvergerer med en gang,
     // deretter rolig vedlikehold.
+    // Begge intervallene MAA ryddes. Foer fikk det rolige aldri et handtak,
+    // saa hver gjenoppkobling la paa et nytt: malt 1, 2, 3 og 4 ping i
+    // sekundet etter null til tre gjenoppkoblinger.
+    clearInterval(pingFast); clearInterval(pingSlow);
     let burst = 0;
-    const fast = setInterval(() => {
+    pingFast = setInterval(() => {
       ping();
-      if (++burst >= 12) { clearInterval(fast); setInterval(ping, 1000); }
+      if (++burst >= 12) { clearInterval(pingFast); pingSlow = setInterval(ping, 1000); }
     }, 120);
   };
 
@@ -742,6 +756,14 @@ async function keepAwake() {
   } catch { return false; }
 }
 
+// Kobles det til en Bluetooth-hoyttaler paa OS-nivaa, byttes utgangen under
+// nettleseren uten at vi ber om det. Samme sak: alt vi visste om lydklokka
+// er utdatert i det oyeblikket.
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  audioClock?.reset();
+  loadDevices().catch(() => {});
+});
+
 // Laasen slippes automatisk naar fanen skjules — ta den igjen naar vi er tilbake.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && ctx && !wakeLock) keepAwake();
@@ -831,6 +853,10 @@ $('outDev').onchange = async () => {
   }
   try {
     await ctx.setSinkId(id);
+    // Ny utgang betyr ny forsinkelse og ny pipeline. Maalingene fra for
+    // gjelder ikke lenger, og en glattet overgang ville bare betydd at
+    // enheten spilte feil i noen sekunder uten aa si fra.
+    audioClock?.reset();
     const name = $('outDev').selectedOptions[0]?.textContent || 'standard';
     $('outHint').textContent = `Nettleseren spiller nå ut på: ${name}.`;
   } catch (e) {

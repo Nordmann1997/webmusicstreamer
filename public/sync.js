@@ -49,9 +49,22 @@ function linearFit(points) {
 // ===========================================================================
 export class ClockSync {
   constructor(opts = {}) {
-    this.windowMs   = opts.windowMs   ?? 30000;  // hvor lenge en maling teller
-    this.keepBest   = opts.keepBest   ?? 8;      // hvor mange lav-RTT-malinger vi tilpasser
+    // 120 sekunder og de 24 beste, ikke 30 og 8. Malt paa simulert nett med
+    // 60 ms ko gikk verste feil i estimert servertid ett sekund fram fra
+    // 9,2 ms til 3,4 ms, og taktestimatet fra 46 ppm (sant 20) til 22.
+    // Et lengre vindu koster bare at et EKTE sprang tar lenger tid aa
+    // vaske ut — derfor oppdager vi sprang i stedet, se under.
+    this.windowMs   = opts.windowMs   ?? 120000; // hvor lenge en maling teller
+    this.keepBest   = opts.keepBest   ?? 24;     // hvor mange lav-RTT-malinger vi tilpasser
     this.minSamples = opts.minSamples ?? 4;
+
+    // Serveren teller fra null hver gang den starter. Etter en omstart er
+    // alle gamle malinger feil med hele oppetida til den forrige serveren,
+    // og de blir liggende og odelegge til de faller ut av vinduet. Tre
+    // malinger paa rad som spriker fra modellen er et sprang, ikke stoy.
+    this.stepGuard = opts.stepGuard ?? 3;
+    this._offSpree = 0;
+    this.steps = 0;
 
     this.samples = [];     // { local, offset, rtt }
     this._fit    = { a: 0, b: 0 };
@@ -82,6 +95,17 @@ export class ClockSync {
     const offset = ((t2 - t1) + (t3 - t4)) / 2;
 
     if (rtt < 0) return;                      // umulig maling, kast den
+
+    // Sprang? En koforsinkelse kan bare skyve offset med halve RTT-en, saa
+    // et avvik paa mange ganger det er noe annet enn nett.
+    if (this.ready && this.samples.length >= this.minSamples) {
+      const grense = Math.max(100, 10 * this.minRtt);
+      if (Math.abs(offset - this._fit.a - this._fit.b * (t4 - this._t0)) > grense) {
+        if (++this._offSpree >= this.stepGuard) { this.reset(); this.steps++; }
+      } else {
+        this._offSpree = 0;
+      }
+    }
 
     if (this._t0 === null) this._t0 = t4;
     this.samples.push({ local: t4, offset, rtt });
@@ -116,6 +140,16 @@ export class ClockSync {
     // krystallene gaar i ulik takt, sa estimatet holder mellom malingene.
     this._fit = linearFit(best.map(s => ({ x: s.local - this._t0, y: s.offset })));
     this.ready = true;
+  }
+
+  /** Glem alt. Kalles ved gjenoppkobling: serveren kan ha startet paa nytt,
+   *  og da er hver eneste gamle maling feil. */
+  reset() {
+    this.samples = [];
+    this._fit = { a: 0, b: 0 };
+    this._t0 = null;
+    this.ready = false;
+    this._offSpree = 0;
   }
 
   /** Estimert servertid (ms) for et gitt lokalt performance.now()-tidspunkt. */
@@ -191,6 +225,17 @@ export class AudioClockTracker {
     this._rate   = 1;        // ms lydklokke per ms systemklokke
     this._offset = 0;        // ms
     this.ready   = false;
+  }
+
+  /** Glem alt. Kalles naar utgangen byttes: da endres bade forsinkelsen og
+   *  selve pipelinen, og maalingene fra for gjelder ikke lenger. */
+  reset() {
+    this.samples = [];
+    this._p0 = null;
+    this._offset = 0;
+    this.ready = false;
+    this.resets++;
+    // Takten beholdes — krystallen er den samme selv om utgangen byttes.
   }
 
   _read() {
