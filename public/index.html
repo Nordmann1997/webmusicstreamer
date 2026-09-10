@@ -505,7 +505,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-09.2045';
+const VERSION = '2026-09-09.2130';
 
 const $ = id => document.getElementById(id);
 
@@ -514,6 +514,7 @@ const clock = new ClockSync();
 let ws, ctx, audioClock, player, measurer, sender, receiver;
 let broadcastActive = false;
 let streamStart = performance.now();
+let silentFor = 0;
 let reconnectTries = 0;
 let pings = 0, clicksPlayed = 0, clicksMissed = 0;
 let myRole = null, peerCount = 0;
@@ -819,6 +820,36 @@ $('outDev').onchange = async () => {
 };
 
 
+/** Delinga gaar, men det kommer ingen lyd inn. Si det tydelig, og legg hele
+ *  diagnosen i konsollen slik at den kan kopieres rett ut. */
+function reportSilence() {
+  const tr = sender?.stream?.getAudioTracks?.()[0];
+  const st = tr?.getSettings?.() || {};
+  const linjer = [
+    `versjon        ${VERSION}`,
+    `kilde          ${tr?.label || 'ukjent'}`,
+    `spor aktivt    ${tr ? tr.readyState : '—'} · muted ${tr ? tr.muted : '—'}`,
+    `demping lokalt ${st.suppressLocalAudioPlayback === true ? 'på' : 'AV'}`,
+    `kanaler        ${st.channelCount ?? '?'} · ${st.sampleRate ?? '?'} Hz`,
+    `blokker fanget ${sender.blocks}`,
+    `nivaa inn      ${sender.inputDb === -Infinity ? '-inf' : sender.inputDb.toFixed(1)} dBFS`,
+    `kodek          ${sender.codec} · ${sender.bytesSent} byte sendt`,
+    `lydklokke      ${audioClock?.ready ? 'klar' : 'ikke klar'} · brudd ${audioClock?.resets ?? '—'}`,
+    `klokke         ${clock.ready ? 'klar' : 'ikke klar'}`,
+  ].join('\n');
+  console.log('--- WebMultiroom: stille deling ---\n' + linjer);
+
+  const melding = st.suppressLocalAudioPlayback === true
+    ? 'Kilden er stille. Spilles det faktisk lyd i fanen du delte?'
+    : 'Chrome deler bilde uten lyd. Velg en Chrome-fane og huk av ' +
+      '«Also share tab audio» i dialogen.';
+  $('stateTxt').textContent = melding;
+  $('dot').className = 'dot warn2';
+  $('shareHint').textContent = melding + ' Full diagnose ligger i konsollen.';
+  showControls = true;
+  paintFront();
+}
+
 function updateStreamUI() {
   const iAmSender = !!sender?.running;
   $('streamState').textContent = iAmSender ? 'du sender'
@@ -1009,6 +1040,12 @@ setInterval(() => {
     $('streamState').textContent =
       `du sender · ${sender.codec === 'opus' ? 'Opus' : 'rå PCM'} · ` +
       `${kbit.toFixed(0)} kbit/s · ${inn}`;
+
+    // Etter noen sekunder vet vi nok. Er det fortsatt stille, er den vanligste
+    // aarsaken at Chrome delte BILDE uten lyd — og da sier ingenting fra av
+    // seg selv, fordi lydsporet finnes, det er bare tomt.
+    silentFor = (sender.blocks > 150 && db < -70) ? silentFor + 1 : 0;
+    if (silentFor === 3) reportSilence();
   } else if (receiver && receiver.received > 0) {
     const r = receiver;
     const secs = (performance.now() - streamStart) / 1000;
@@ -1085,6 +1122,7 @@ function paintFront() {
   $('shareBlob').innerHTML = sender?.running ? 'Stop<br>sharing' : 'Share<br>to others';
 
   const dot = $('dot'), txt = $('stateTxt');
+  if (silentFor >= 3) return;              // la stille-meldinga staa
   dot.className = 'dot';
   if (!ws || ws.readyState !== 1) { txt.textContent = 'Not connected'; }
   else if (sender?.running) { dot.classList.add('live');
