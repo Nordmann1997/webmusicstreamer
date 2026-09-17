@@ -69,6 +69,42 @@ let broadcaster = null;
 // aapner utviklerverktoyet; serveren maa nekte selve lydpakkene.
 const SHARE_KEY = process.env.SHARE_KEY || '';
 let audioPackets = 0;
+let lastAudio = 0;        // naar senderen sist sendte noe
+
+// --- Puls -----------------------------------------------------------------
+// En TCP-forbindelse kan bli halvaapen: maskinen sovner eller mister nettet,
+// og serveren faar ALDRI 'close'. Da staar senderrollen opptatt av noen som
+// ikke finnes, og enhetstelleren viser folk som for lengst er borte. Uten en
+// puls oppdager serveren det aldri.
+//
+// ws sender en ekte WebSocket-ping. Svarer ikke klienten innen neste runde,
+// river vi forbindelsen — og da kjorer 'close', som frigjor senderrollen.
+const PULS_MS = Number(process.env.PULSE_MS) || 25000;
+setInterval(() => {
+  for (const c of clients) {
+    if (c.isAlive === false) {
+      console.log('Klient svarte ikke paa puls — river forbindelsen');
+      c.terminate();
+      continue;
+    }
+    c.isAlive = false;
+    try { c.ping(); } catch {}
+  }
+}, PULS_MS);
+
+// Puls tar tid — inntil 50 sekunder i verste fall. Senderen skal vi oppdage
+// fortere, for det er den som blokkerer alle andre. Mens noen deler kommer
+// det rundt femti lydpakker i sekundet, ogsaa i stille partier, saa femten
+// sekunders stillhet betyr at senderen er borte uansett hva sokkelen sier.
+const SENDER_TAUSHET_MS = Number(process.env.SENDER_IDLE_MS) || 15000;
+setInterval(() => {
+  if (!broadcaster) return;
+  if (Date.now() - lastAudio < SENDER_TAUSHET_MS) return;
+  console.log('Senderen har vaert taus i 15 s — frigjor rollen');
+  broadcaster = null;
+  audioPackets = 0;
+  broadcast({ type: 'broadcast', active: false });
+}, Math.min(5000, SENDER_TAUSHET_MS / 3));
 
 // Del ut den rollen som er minst brukt blant dem som faktisk er tilkoblet.
 // En teller som bare teller oppover gir kollisjon sa snart en klient laster
@@ -87,6 +123,8 @@ function broadcast(obj) {
 
 wss.on('connection', (ws) => {
   clients.add(ws);
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   ws.role = assignRole();
   console.log(`Klient koblet til som rolle ${ws.role} (${clients.size} totalt)`);
   ws.send(JSON.stringify({ type: 'role', role: ws.role }));
@@ -112,11 +150,13 @@ wss.on('connection', (ws) => {
       if (!broadcaster) {
         if (SHARE_KEY && !ws.mayShare) return;   // ingen nokkel, ingen deling
         broadcaster = ws;
+        lastAudio = Date.now();
         console.log('Sender startet');
         broadcast({ type: 'broadcast', active: true });
       }
       if (ws !== broadcaster) return;
       audioPackets++;
+      lastAudio = Date.now();
       for (const c of clients) {
         if (c !== ws && c.readyState === c.OPEN) c.send(raw, { binary: true });
       }
@@ -135,6 +175,14 @@ wss.on('connection', (ws) => {
           (typeof msg.key === 'string' && msg.key === SHARE_KEY);
       }
       ws.send(JSON.stringify({ type: 'sharegate', locked: !!SHARE_KEY, ok: !!ws.mayShare }));
+
+    } else if (msg.type === 'restart') {
+      // Tjenesten kjorer under launchd med KeepAlive, saa aa avslutte er det
+      // samme som aa starte paa nytt. Klientene kobler seg opp igjen selv.
+      if (SHARE_KEY && !ws.mayShare) return;
+      console.log('Omstart bedt om utenfra');
+      ws.send(JSON.stringify({ type: 'restarting' }));
+      setTimeout(() => process.exit(0), 150);
 
     } else if (msg.type === 'ping') {
       // t1 sendes uendret tilbake sa klienten slipper a holde styr paa den.

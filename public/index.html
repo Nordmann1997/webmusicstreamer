@@ -195,7 +195,9 @@
      ekte sperra staar i server.js, som nekter lydpakker uten nokkel. */
   body:not(.can-share) #shareBlob,
   body:not(.can-share) #shareBtn,
-  body:not(.can-share) #shareHint { display: none; }
+  body:not(.can-share) #shareHint,
+  body:not(.can-share) #restartBtn,
+  body:not(.can-share) #restartHint { display: none; }
   #keyRow { margin-top: 14px; }
   #keyRow input { width: 100%; padding: 8px; font-size: 14px; }
 
@@ -441,6 +443,9 @@
 
   <div class="hint" id="shareHint"></div>
 
+  <button id="restartBtn">Start serveren paa nytt</button>
+  <div class="hint" id="restartHint"></div>
+
   <label class="row" style="margin-top:14px">
     <span class="dim">Spill av på</span>
     <select id="outDev"><option value="">Systemets standard</option></select>
@@ -542,7 +547,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-10.1720';
+const VERSION = '2026-09-17.1230';
 
 const $ = id => document.getElementById(id);
 
@@ -633,6 +638,11 @@ function connect() {
     if (ev.data instanceof ArrayBuffer) { receiver?.onPacket(ev.data); return; }
 
     const msg = JSON.parse(ev.data);
+
+    if (msg.type === 'restarting') {
+      $('restartHint').textContent = 'Serveren starter paa nytt ...';
+      return;
+    }
 
     if (msg.type === 'sharegate') {
       shareLocked = msg.locked;
@@ -979,6 +989,15 @@ function updateStreamUI() {
         'velg en annen utgang over — å skru ned volumet demper begge to.';
   }
 }
+
+// Naar serveren henger — typisk fordi en maskin sovnet midt i sendingen og
+// forbindelsen ble halvaapen — er dette veien tilbake uten aa vaere i samme rom
+// som maskinen. launchd starter tjenesten igjen med en gang den avslutter.
+$('restartBtn').onclick = () => {
+  if (!ws || ws.readyState !== 1) { $('restartHint').textContent = 'Ikke tilkoblet.'; return; }
+  ws.send(JSON.stringify({ type: 'restart' }));
+  $('restartHint').textContent = 'Bedt om omstart — kommer tilbake om noen sekunder.';
+};
 
 $('shareKey').onchange = () => {
   shareKey = $('shareKey').value.trim();
