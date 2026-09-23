@@ -175,9 +175,23 @@ export class AudioSender {
       this.codec = 'pcm';
       return;
     }
+    this._makeEncoder();
+    this.codec = 'opus';
+  }
+
+  /**
+   * Lager (eller gjenskaper) Opus-koderen.
+   *
+   * For gikk senderen over til raa PCM for resten av okta ved forste feil.
+   * Det er 12x mer data: over internett er det nok til at lytterne begynner aa
+   * miste pakker, og da «faller alle ut» uten at noe sier hvorfor. En koder
+   * som feiler — Chrome kan ta den tilbake, eller den kan faa en rar blokk —
+   * er som regel frisk igjen hvis man bare lager en ny.
+   */
+  _makeEncoder() {
     this.encoder = new AudioEncoder({
       output: (chunk) => {
-        if (!this.running || this.ws.readyState !== WebSocket.OPEN) return;
+        if (!this.running) return;
         const payload = new ArrayBuffer(chunk.byteLength);
         chunk.copyTo(payload);
         const buf = encodeOpusPacket({
@@ -185,19 +199,36 @@ export class AudioSender {
           timestampUs: chunk.timestamp,      // uendret hele veien fra fangst
           payload,
         });
-        this.ws.send(buf);
-        this.sent++;
-        this.bytesSent += buf.byteLength;
+        this._send(buf);
         this.onlocalpacket?.(buf);
       },
       error: (e) => {
-        console.error('Opus-koder feilet, gaar over til raa PCM:', e);
-        this.codec = 'pcm';
+        this.encoderRestarts = (this.encoderRestarts || 0) + 1;
+        console.error(`Opus-koder feilet (${this.encoderRestarts}):`, e);
         this.encoder = null;
+        // Feiler den gang paa gang, er det noe varig galt — da er PCM bedre
+        // enn stillhet.
+        if (this.encoderRestarts > 10) this.codec = 'pcm';
       },
     });
     this.encoder.configure(OPUS_CONFIG);
-    this.codec = 'opus';
+  }
+
+  /**
+   * Send en pakke — men ikke hvis linja er tett.
+   *
+   * Staar det mer enn et par sekunder med lyd i ko, er alt i koen for sent
+   * uansett. Aa legge mer paa gjor bare at det tar lenger tid aa komme ajour
+   * naar linja aapner seg igjen, og hele rommet henger etter i mellomtida.
+   */
+  _send(buf) {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const limit = this.codec === 'opus' ? 48 * 1024 : 384 * 1024;   // ~2-3 s
+    if (ws.bufferedAmount > limit) { this.skipped = (this.skipped || 0) + 1; return; }
+    ws.send(buf);
+    this.sent++;
+    this.bytesSent += buf.byteLength;
   }
 
   /**
@@ -303,6 +334,9 @@ export class AudioSender {
     const localMs  = this._contextToLocal(t);
     const serverMs = this.clock.serverTimeAt(localMs);
 
+    if (this.codec === 'opus' && !this.encoder) {
+      try { this._makeEncoder(); } catch { this.codec = 'pcm'; }
+    }
     if (this.encoder && this.codec === 'opus') {
       // Servertida legges i AudioData-tidsstempelet og folger med gjennom
       // koderen. Pakken sendes fra output-tilbakekallet over.
@@ -318,7 +352,8 @@ export class AudioSender {
         timestamp: Math.round(serverMs * 1000),   // mikrosekunder
         data: planar,
       });
-      this.encoder.encode(data);
+      try { this.encoder.encode(data); }
+      catch { this.encoder = null; }       // lukket under oss — lages paa nytt neste blokk
       data.close();
       return;
     }
@@ -332,9 +367,7 @@ export class AudioSender {
       ch0, ch1,
     });
 
-    this.ws.send(buf);
-    this.sent++;
-    this.bytesSent += buf.byteLength;
+    this._send(buf);
 
     // Senderen kan spille sin EGEN strom, med samme bufferforsinkelse som alle
     // andre. Da er kilden ogsa i takt — ellers ligger den alltid foran, fordi
@@ -486,6 +519,11 @@ export class AudioReceiver {
     if (this.lastSeq >= 0 && p.seq > this.lastSeq + 1) this.gaps += p.seq - this.lastSeq - 1;
     if (p.seq > this.lastSeq) this.lastSeq = p.seq;
 
+    // En dekoder som har feilet er lukket for godt, og hver pakke etter det
+    // kaster. For ble den staaende slik: lyden var borte til sida ble lastet
+    // paa nytt. Naa lages en ny.
+    if (this.decoder && this.decoder.state === 'closed') this.decoder = null;
+
     if (!this.decoder) {
       if (typeof AudioDecoder === 'undefined') {
         this.decodeErrors++;
@@ -501,6 +539,7 @@ export class AudioReceiver {
           this.decodeErrors++;
           this.lastError = `dekoder: ${e.message || e}`;
           console.error('Opus-dekoder:', e);
+          this.decoder = null;               // ny ved neste pakke
         },
       });
       this.decoder.configure({
@@ -619,6 +658,12 @@ export class AudioReceiver {
     if (this.onblock) {
       try { this.onblock(c.ch0, c.ch1, p.sampleRate, when); } catch {}
     }
+  }
+
+  /** Ny sender: sekvensnumrene begynner paa nytt, og tidslinja gjelder ikke. */
+  newStream() {
+    this.lastSeq = -1;
+    this.timeline.reset();
   }
 
   get resyncs()          { return this.timeline.resyncs; }

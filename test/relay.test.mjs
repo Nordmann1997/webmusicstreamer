@@ -58,7 +58,9 @@ console.log('\n=== Innholdet er uendret ===');
 }
 
 console.log('\n=== Alle fikk beskjed om at sendingen startet ===');
-check(b.broadcastMsgs[0] === true && c.broadcastMsgs[0] === true, 'lytterne varslet');
+// Forste melding er tilstanden ved tilkobling (ingen sender); saa kommer «i gang».
+check(b.broadcastMsgs.includes(true) && c.broadcastMsgs.includes(true), 'lytterne varslet');
+check(b.broadcastMsgs[0] === false, 'ny tilkobling faar vite at ingen sendte');
 
 console.log('\n=== Bare én sender slipper til ===');
 {

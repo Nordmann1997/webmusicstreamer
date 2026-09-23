@@ -30,6 +30,7 @@ if [ ! -f "$KEY_FILE" ]; then
   LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 12 > "$KEY_FILE"
   chmod 600 "$KEY_FILE"
   echo "Laget ny delingsnokkel i $KEY_FILE"
+  echo "  Vil du heller ha et ord du husker:  bash deploy/set-key.sh <ord>"
 fi
 SHARE_KEY="$(cat "$KEY_FILE")"
 

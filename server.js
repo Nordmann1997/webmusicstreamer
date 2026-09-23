@@ -37,23 +37,38 @@ const MIME = {
   '.css':  'text/css; charset=utf-8',
 };
 
+const PUBLIC = path.join(__dirname, 'public');
+
 const server = http.createServer((req, res) => {
-  let rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  // En ugyldig adresse (f.eks. «/%E0%A4%A») faar decodeURIComponent til aa
+  // kaste. Uten try her tok EN slik forespørsel ned hele serveren — og med en
+  // aapen adresse paa nett kommer det skannere som sender akkurat det. Alle
+  // lyttere mistet forbindelsen samtidig, og launchd startet den paa nytt.
+  let rel;
+  try { rel = decodeURIComponent(new URL(req.url, 'http://x').pathname); }
+  catch { res.writeHead(400).end('Bad request'); return; }
   if (rel === '/') rel = '/index.html';
 
-  const file = path.join(__dirname, 'public', rel);
-  if (!file.startsWith(path.join(__dirname, 'public'))) {
+  const file = path.join(PUBLIC, rel);
+  // Med path.sep: ellers slipper «/public-noe-annet» gjennom prefikssjekken.
+  if (!file.startsWith(PUBLIC + path.sep)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404).end('Not found'); return; }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      // Cloudflare mellomlagrer .js og .css som standard. Uten dette kan en
+      // enhet kjore ny index.html med GAMMEL stream.js etter en oppdatering —
+      // to versjoner av protokollen i samme fane.
+      'Cache-Control': 'no-cache',
+    });
     res.end(data);
   });
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: 256 * 1024 });
 const clients = new Set();
 
 // Én sender om gangen. Den forste som sender binaere data eier stromen til den
@@ -83,8 +98,8 @@ const PULS_MS = Number(process.env.PULSE_MS) || 25000;
 setInterval(() => {
   for (const c of clients) {
     if (c.isAlive === false) {
-      console.log('Klient svarte ikke paa puls — river forbindelsen');
-      c.terminate();
+      console.log(`${c.name} svarte ikke paa puls — river forbindelsen`);
+      drop(c);
       continue;
     }
     c.isAlive = false;
@@ -96,14 +111,14 @@ setInterval(() => {
 // fortere, for det er den som blokkerer alle andre. Mens noen deler kommer
 // det rundt femti lydpakker i sekundet, ogsaa i stille partier, saa femten
 // sekunders stillhet betyr at senderen er borte uansett hva sokkelen sier.
-const SENDER_TAUSHET_MS = Number(process.env.SENDER_IDLE_MS) || 15000;
+// Fem sekunder, ikke femten: i femten sekunder trodde alle at det ble
+// strommet fra en fane som for lengst var lastet paa nytt.
+const SENDER_TAUSHET_MS = Number(process.env.SENDER_IDLE_MS) || 5000;
 setInterval(() => {
   if (!broadcaster) return;
   if (Date.now() - lastAudio < SENDER_TAUSHET_MS) return;
-  console.log('Senderen har vaert taus i 15 s — frigjor rollen');
-  broadcaster = null;
-  audioPackets = 0;
-  broadcast({ type: 'broadcast', active: false });
+  console.log(`Senderen har vaert taus i ${SENDER_TAUSHET_MS / 1000} s — frigjor rollen`);
+  releaseSender();
 }, Math.min(5000, SENDER_TAUSHET_MS / 3));
 
 // Del ut den rollen som er minst brukt blant dem som faktisk er tilkoblet.
@@ -121,14 +136,76 @@ function broadcast(obj) {
   for (const c of clients) if (c.readyState === c.OPEN) c.send(s);
 }
 
-wss.on('connection', (ws) => {
+// --- Delingskode --------------------------------------------------------------
+// Koden skal kunne huskes og skrives paa en mobil, saa store/smaa bokstaver og
+// mellomrom rundt teller ikke. Det gjor den lettere aa gjette — derfor sperrer
+// vi en IP etter for mange bom, i tillegg til taket per tilkobling.
+const normKey = k => String(k ?? '').normalize('NFC').trim().toLowerCase();
+const KEY_N = normKey(SHARE_KEY);
+const BOM_TAK = 10;                  // feil per IP ...
+const BOM_SPERRE_MS = 10 * 60000;    // ... gir ti minutter pause
+const bom = new Map();               // ip -> { n, until }
+
+function keyOk(ws, key) {
+  if (!SHARE_KEY) return true;
+  const b = bom.get(ws.ip);
+  if (b && b.until > Date.now()) return false;
+  if (normKey(key) === KEY_N) { bom.delete(ws.ip); return true; }
+  const n = (b && b.until === 0 ? b.n : 0) + 1;
+  bom.set(ws.ip, { n, until: n >= BOM_TAK ? Date.now() + BOM_SPERRE_MS : 0 });
+  if (n >= BOM_TAK) console.log(`For mange feil kode fra ${ws.ip} — sperret i 10 min`);
+  return false;
+}
+
+// --- Senderrollen ---------------------------------------------------------------
+function releaseSender(why = '') {
+  if (!broadcaster) return;
+  console.log(`Sender frigjort${why ? ` (${why})` : ''} etter ${audioPackets} lydpakker`);
+  broadcaster = null;
+  audioPackets = 0;
+  broadcast({ type: 'broadcast', active: false, sender: null });
+  announcePeers();
+}
+
+/**
+ * Fjern en klient fra ALL bokforing med en gang, og lukk den etterpaa.
+ *
+ * close() venter paa at motparten svarer. Er motparten en fane som er lastet
+ * paa nytt eller en maskin som har sovnet, svarer den aldri, og ws venter i
+ * 30 sekunder for den gir opp. Hele den tida sto den i enhetslista og kunne
+ * eie senderrollen. Derfor gjor vi bokforingen for vi lukker.
+ */
+function drop(c, code, reason) {
+  if (!clients.has(c)) return;
+  clients.delete(c);
+  if (c === broadcaster) releaseSender(reason);
+  reassignRoles();
+  announcePeers();
+  try { code ? c.close(code, reason) : c.terminate(); } catch {}
+}
+
+// En lytter paa treg linje faar ikke hope opp lyd i serverens minne. Det som
+// ligger mer enn et sekund i ko kommer uansett for sent til aa bli spilt.
+const MAX_KO_BYTES = 256 * 1024;
+
+wss.on('connection', (ws, req) => {
   clients.add(ws);
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
+  // Bak Cloudflare-tunnelen er alle tilkoblinger fra localhost; den ekte
+  // adressen staar i headeren.
+  ws.ip = req.headers['cf-connecting-ip'] || req.socket.remoteAddress || '?';
+  ws.clientId = null;
+  ws.name = 'Ukjent enhet';
+  ws.listening = false;
+  ws.since = Date.now();
   ws.role = assignRole();
   console.log(`Klient koblet til som rolle ${ws.role} (${clients.size} totalt)`);
   ws.send(JSON.stringify({ type: 'role', role: ws.role }));
-  if (broadcaster) ws.send(JSON.stringify({ type: 'broadcast', active: true }));
+  // ALLTID, ogsaa naar ingen sender. Klienten kan ha en gammel «aktiv» liggende
+  // fra for en frakobling, og uten et eksplisitt nei blir den staaende.
+  ws.send(JSON.stringify({ type: 'broadcast', active: !!broadcaster,
+                           sender: broadcaster?.clientId ?? null }));
   // Uten nokkel er alle sendere, som for. Med nokkel maa klienten sporre.
   ws.mayShare = !SHARE_KEY;
   ws.send(JSON.stringify({ type: 'sharegate', locked: !!SHARE_KEY, ok: !SHARE_KEY }));
@@ -142,6 +219,7 @@ wss.on('connection', (ws) => {
   ws.on('message', (raw, isBinary) => {
     // Tidsstempel FORST, for parsing — vi vil ikke ha JSON.parse med i malingen.
     const t2 = now();
+    if (!clients.has(ws)) return;          // allerede kastet ut, bare ikke lukket
 
     // Lydpakker er binaere og gaar rett videre til alle andre. Serveren tolker
     // dem ikke: tidsstempelet inni er allerede i servertid, og hver mottaker
@@ -151,14 +229,17 @@ wss.on('connection', (ws) => {
         if (SHARE_KEY && !ws.mayShare) return;   // ingen nokkel, ingen deling
         broadcaster = ws;
         lastAudio = Date.now();
-        console.log('Sender startet');
-        broadcast({ type: 'broadcast', active: true });
+        console.log(`Sender startet: ${ws.name}`);
+        broadcast({ type: 'broadcast', active: true, sender: ws.clientId });
+        announcePeers();
       }
       if (ws !== broadcaster) return;
       audioPackets++;
       lastAudio = Date.now();
       for (const c of clients) {
-        if (c !== ws && c.readyState === c.OPEN) c.send(raw, { binary: true });
+        if (c === ws || c.readyState !== c.OPEN) continue;
+        if (c.bufferedAmount > MAX_KO_BYTES) { c.skipped = (c.skipped || 0) + 1; continue; }
+        c.send(raw, { binary: true });
       }
       return;
     }
@@ -166,15 +247,63 @@ wss.on('connection', (ws) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
-    if (msg.type === 'auth') {
-      // Fem forsok per tilkobling. Den som vil gjette maa koble til paa nytt
-      // for hvert femte forsok, og da er det ikke lenger noen snarvei.
-      ws.authTries = (ws.authTries || 0) + 1;
-      if (ws.authTries <= 5) {
-        ws.mayShare = !SHARE_KEY ||
-          (typeof msg.key === 'string' && msg.key === SHARE_KEY);
+    if (msg.type === 'hello') {
+      // Hver fane har en ID som overlever en omlasting. Kommer den samme ID-en
+      // inn paa nytt, er den gamle tilkoblingen en fane som ikke finnes lenger
+      // — selv om serveren ikke har faatt vite det ennaa. Det var den som
+      // gjorde at sida trodde det ble strommet etter en omlasting, og at det
+      // saa ut som det var flere enheter enn det var.
+      const id = typeof msg.id === 'string' ? msg.id.slice(0, 40) : null;
+      ws.name = typeof msg.name === 'string' && msg.name.trim()
+        ? msg.name.trim().slice(0, 40) : ws.name;
+      ws.listening = !!msg.listening;
+      if (id) {
+        for (const c of clients) {
+          if (c !== ws && c.clientId === id) {
+            console.log(`${ws.name}: ny tilkobling fra samme fane — den gamle kastes`);
+            // 4000 = «erstattet». Er den gamle fanen faktisk i live (en
+            // duplisert fane arver sessionStorage og dermed ID-en), lager den
+            // seg en ny ID og kobler til igjen.
+            try { c.send(JSON.stringify({ type: 'replaced' })); } catch {}
+            drop(c, 4000, 'erstattet');
+          }
+        }
+        ws.clientId = id;
       }
+      announcePeers();
+
+    } else if (msg.type === 'state') {
+      if ('listening' in msg) ws.listening = !!msg.listening;
+      if (typeof msg.name === 'string' && msg.name.trim()) ws.name = msg.name.trim().slice(0, 40);
+      announcePeers();
+
+    } else if (msg.type === 'auth') {
+      // Fem forsok per tilkobling, og et tak per IP i tillegg.
+      ws.authTries = (ws.authTries || 0) + 1;
+      if (ws.authTries <= 5) ws.mayShare = keyOk(ws, msg.key);
       ws.send(JSON.stringify({ type: 'sharegate', locked: !!SHARE_KEY, ok: !!ws.mayShare }));
+
+    } else if (msg.type === 'admin') {
+      // Kontroll over rommet: stopp den som deler, eller kast ut en enhet.
+      // Bare for den som har koden.
+      if (SHARE_KEY && !ws.mayShare) return;
+      if (msg.action === 'stop-sharing') {
+        if (broadcaster && broadcaster !== ws) {
+          try { broadcaster.send(JSON.stringify({ type: 'stop-sharing' })); } catch {}
+        }
+        releaseSender('stoppet av ' + ws.name);
+      } else if (msg.action === 'kick') {
+        for (const c of clients) {
+          if (c !== ws && c.clientId && c.clientId === msg.id) {
+            console.log(`${ws.name} kastet ut ${c.name}`);
+            try { c.send(JSON.stringify({ type: 'kicked' })); } catch {}
+            drop(c, 4001, 'kastet ut');
+          }
+        }
+      }
+
+    } else if (msg.type === 'sharing-stopped') {
+      if (ws === broadcaster) releaseSender('stoppet av senderen');
 
     } else if (msg.type === 'restart') {
       // Tjenesten kjorer under launchd med KeepAlive, saa aa avslutte er det
@@ -200,22 +329,27 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    clients.delete(ws);
-    console.log(`Klient koblet fra (${clients.size} igjen)`);
-    if (ws === broadcaster) {
-      broadcaster = null;
-      console.log(`Sender koblet fra (${audioPackets} lydpakker relayet)`);
-      audioPackets = 0;
-      broadcast({ type: 'broadcast', active: false });
-    }
-    reassignRoles();
-    announcePeers();
+    if (!clients.has(ws)) return;          // allerede ryddet av drop()
+    console.log(`Klient koblet fra (${clients.size - 1} igjen)`);
+    drop(ws);
   });
-  ws.on('error', () => clients.delete(ws));
+  ws.on('error', () => drop(ws));
 });
 
+// Hvem er her. Sendes til alle, saa hver enhet kan se lista; bare den med
+// koden faar lov til aa gjore noe med den.
 function announcePeers() {
-  broadcast({ type: 'peers', count: clients.size, roles: [...clients].map(c => c.role) });
+  const list = [...clients];
+  broadcast({
+    type: 'peers',
+    count: list.length,
+    listening: list.filter(c => c.listening || c === broadcaster).length,
+    roles: list.map(c => c.role),
+    devices: list.map(c => ({
+      id: c.clientId, name: c.name, listening: c.listening,
+      sender: c === broadcaster, since: c.since,
+    })),
+  });
 }
 
 // Rollene deles ut paa nytt hver gang noen kommer eller gaar. Uten dette kan en

@@ -191,9 +191,10 @@
     opacity: 0; pointer-events: none; max-height: 82vh; overflow: auto;
     transition: transform .34s cubic-bezier(.2,.9,.3,1.15), opacity .22s ease;
   }
+  /* Share-knappen foran vises alltid: uten kode spor den etter koden i
+     stedet for aa vaere borte. */
   /* Deling er skjult til serveren har sagt ja. Dette er BARE pynt — den
      ekte sperra staar i server.js, som nekter lydpakker uten nokkel. */
-  body:not(.can-share) #shareBlob,
   body:not(.can-share) #shareBtn,
   body:not(.can-share) #shareHint,
   body:not(.can-share) #restartBtn,
@@ -202,9 +203,35 @@
   #keyRow input { width: 100%; padding: 8px; font-size: 14px; }
 
   body.sharing-help #shareHelp,
+  body.devices     #devicesBox,
   body.asking      #syncBox { opacity: 1; pointer-events: auto;
                               transform: translate(-50%, -50%) scale(1); }
-  body.asking .middle { opacity: 0; pointer-events: none; }
+  body.asking .middle, body.devices .middle { opacity: 0; pointer-events: none; }
+
+  /* Statuslinja er ogsaa en knapp: trykk for aa se hvem som er her. */
+  button.state { font: inherit; font-size: 14px; color: var(--dim2); border: 0;
+                 cursor: pointer; }
+  button.state:hover { color: var(--ink); }
+  .devlist { list-style: none; margin: 0 0 14px; padding: 0; }
+  .devlist li { display: flex; align-items: center; gap: 8px; padding: 8px 0;
+                border-bottom: 1px solid rgba(78,74,112,.12); font-size: 14px; }
+  .devlist li:last-child { border-bottom: 0; }
+  .devlist .dn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+  .devlist .me { color: var(--dim2); font-weight: 400; }
+  .devlist .ds { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 999px;
+                 background: rgba(78,74,112,.10); color: var(--dim2); }
+  .devlist .ds.s { background: var(--accent); color: #fff6ee; }
+  .devlist .ds.l { background: rgba(79,157,105,.18); color: #3c7a51; }
+  .devlist button { font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+                    border-radius: 999px; padding: 4px 10px; color: var(--accent-deep);
+                    background: none; border: 1px solid rgba(194,116,74,.45); }
+  .fieldrow { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; color: var(--dim2); }
+  .fieldrow input { font: inherit; font-size: 16px; color: var(--ink); padding: 10px 12px;
+                    border-radius: 14px; border: 1px solid rgba(78,74,112,.25);
+                    background: #fffaf2; }
+  .wide { width: 100%; margin-bottom: 10px; }
+  #codeHint { min-height: 18px; color: var(--accent-deep); font-weight: 600; }
 
   .bigblob .lab { display: flex; justify-content: space-between;
                   font-size: 12px; color: var(--dim2); margin-top: 4px; }
@@ -329,9 +356,9 @@
         <span id="joinLabel">Join</span>
         <span class="sub2" id="joinSub">hear what's playing</span>
       </button>
-      <div class="state" style="margin-top:14px">
+      <button class="state" id="stateBtn" style="margin-top:14px" title="See who is connected">
         <span class="dot" id="dot"></span><span id="stateTxt">Connecting …</span>
-      </div>
+      </button>
       <button id="tuneBtn">Adjust timing</button>
     </div>
     <button class="blob secondary" id="shareBlob">Share<br>to others</button>
@@ -359,8 +386,29 @@
   </div>
 </div>
 
+<div id="devicesBox" class="bigblob">
+  <h2>Who's here</h2>
+  <p class="fine2" id="devSummary"></p>
+  <ul class="devlist" id="devList"></ul>
+  <button class="okbtn wide" id="stopSharingBtn" hidden>Stop the stream for everyone</button>
+  <label class="fieldrow">This device is called
+    <input id="myName" maxlength="40" autocomplete="off">
+  </label>
+  <div class="row2"><button class="ghost" id="devicesClose">Close</button></div>
+</div>
+
 <div id="shareHelp" class="bigblob">
   <h2>Share your audio</h2>
+  <div id="codeGate" hidden>
+    <p>Sharing needs the room code. Listening doesn't — only the one who
+       plays the music needs it.</p>
+    <label class="fieldrow">Room code
+      <input id="codeInput" autocomplete="off" autocapitalize="none"
+             autocorrect="off" spellcheck="false" enterkeyhint="go">
+      <span id="codeHint"></span>
+    </label>
+  </div>
+  <div id="shareSteps">
   <div class="warnbox" id="shareWarn" hidden></div>
   <p>Whatever plays on this computer becomes the stream. Everyone who joins
      hears the same thing at the same moment.</p>
@@ -375,6 +423,7 @@
   </ol>
   <p class="fine2">To share sound from an app instead of a tab, route it through a
      loopback input and pick <b>Audio input</b> in the developer panel.</p>
+  </div>
   <div class="row2">
     <button class="ghost" id="shareBack">Back</button>
     <button class="okbtn" id="shareGo">Choose a tab</button>
@@ -435,7 +484,7 @@
 
   <div id="keyRow">
     <span class="dim">Delingsnokkel</span>
-    <input id="shareKey" type="password" placeholder="lim inn nokkelen" autocomplete="off">
+    <input id="shareKey" type="password" placeholder="romkoden" autocomplete="off">
     <div class="hint" id="keyHint"></div>
   </div>
 
@@ -547,7 +596,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-17.1230';
+const VERSION = '2026-09-24.1500';
 
 const $ = id => document.getElementById(id);
 
@@ -569,6 +618,33 @@ let shareLocked = false, shareKey = '';
     try { shareKey = localStorage.getItem('mr_key') || ''; } catch {}
   }
 }
+
+// --- Hvem er denne fanen ----------------------------------------------------
+// ID-en ligger i sessionStorage: den overlever en omlasting, men ikke at fanen
+// lukkes. Da kan serveren kjenne igjen en omlastet fane og kaste den gamle
+// tilkoblingen med en gang, i stedet for aa vente paa at den doer av seg selv.
+const newId = () => (crypto.randomUUID?.() ||
+  Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 36);
+let clientId = null;
+try { clientId = sessionStorage.getItem('wmId'); } catch {}
+if (!clientId) { clientId = newId(); try { sessionStorage.setItem('wmId', clientId); } catch {} }
+
+function guessName() {
+  const ua = navigator.userAgent;
+  const dev = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad'
+            : /Android/.test(ua) ? 'Android' : /Mac OS X|Macintosh/.test(ua) ? 'Mac'
+            : /Windows/.test(ua) ? 'Windows PC' : /Linux/.test(ua) ? 'Linux' : 'Device';
+  const br  = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera'
+            : /Firefox\/|FxiOS/.test(ua) ? 'Firefox' : /Chrome\/|CriOS/.test(ua) ? 'Chrome'
+            : /Safari\//.test(ua) ? 'Safari' : '';
+  return br ? `${dev} · ${br}` : dev;
+}
+let myName = '';
+try { myName = localStorage.getItem('wmName') || ''; } catch {}
+if (!myName) myName = guessName();
+
+let devices = [], listeningCount = 0, kicked = false, sentListening = null;
+const send = (obj) => { if (ws?.readyState === 1) ws.send(JSON.stringify(obj)); };
 
 const clock = new ClockSync();
 
@@ -602,6 +678,10 @@ function connect() {
 
   ws.onopen = () => {
     reconnectTries = 0;
+    // Forst av alt: hvem vi er. Da kan serveren kaste en gammel tilkobling
+    // fra denne fanen for noen rekker aa se den som en egen enhet.
+    sentListening = listeningNow();
+    send({ type: 'hello', id: clientId, name: myName, listening: sentListening });
     // Nokkelen sendes med en gang, saa retten til aa dele ogsaa overlever en
     // gjenoppkobling — ellers ville en kort nettglipp tatt fra deg knappen
     // midt i en avspilling.
@@ -639,6 +719,15 @@ function connect() {
 
     const msg = JSON.parse(ev.data);
 
+    if (msg.type === 'replaced') return;          // se onclose, kode 4000
+    if (msg.type === 'kicked') { kicked = true; return; }
+    if (msg.type === 'stop-sharing') {
+      // Noen med koden har stoppet strommen. Vi slutter aa sende, ellers tar
+      // neste lydpakke rollen tilbake med en gang.
+      sender?.stop();
+      return;
+    }
+
     if (msg.type === 'restarting') {
       $('restartHint').textContent = 'Serveren starter paa nytt ...';
       return;
@@ -648,11 +737,16 @@ function connect() {
       shareLocked = msg.locked;
       document.body.classList.toggle('can-share', msg.ok);
       if (msg.locked && !msg.ok && shareKey) {
-        $('keyHint').textContent = 'Feil nokkel.';
-        localStorage.removeItem('mr_key'); shareKey = '';
+        $('keyHint').textContent = 'Feil kode.';
+        $('codeHint').textContent = 'That code is not right.';
+        try { localStorage.removeItem('mr_key'); } catch {}
+        shareKey = '';
       } else if (msg.ok && msg.locked) {
         $('keyHint').textContent = 'Laast opp paa denne enheten.';
+        $('codeHint').textContent = '';
       }
+      paintShareHelp();
+      renderDevices();
       paintFront();
       return;
     }
@@ -674,12 +768,17 @@ function connect() {
 
     } else if (msg.type === 'peers') {
       peerCount = msg.count;
+      devices = Array.isArray(msg.devices) ? msg.devices : [];
+      listeningCount = msg.listening ?? msg.count;
       updateBanner();
+      renderDevices();
 
     } else if (msg.type === 'broadcast') {
+      const was = broadcastActive;
       broadcastActive = msg.active;
-      if (msg.active) streamStart = performance.now();
+      if (msg.active && !was) { streamStart = performance.now(); receiver?.newStream(); }
       updateStreamUI();
+      renderDevices();
 
     } else if (msg.type === 'clicks' && player) {
       for (const c of msg.clicks) {
@@ -703,7 +802,27 @@ function connect() {
     }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
+    // Vi vet ingenting om rommet lenger. Blir «aktiv» staaende, tror sida
+    // at det strommes helt til serveren tilfeldigvis sier noe annet.
+    broadcastActive = false;
+    updateStreamUI();
+
+    if (ev.code === 4001 || kicked) {
+      // Kastet ut av den med koden. Ikke koble til igjen av oss selv.
+      $('status').textContent = 'Fjernet fra rommet. Last inn sida på nytt for å bli med igjen.';
+      sender?.stop();
+      paintFront();
+      return;
+    }
+    if (ev.code === 4000) {
+      // En annen fane med samme ID tok over — vi er en duplisert fane som
+      // arvet ID-en. Lag en egen og kom tilbake med en gang.
+      clientId = newId();
+      try { sessionStorage.setItem('wmId', clientId); } catch {}
+      setTimeout(connect, 50);
+      return;
+    }
     reconnectTries++;
     // Etter noen mislykkede forsok er det sjelden en midlertidig hikke.
     // Den vanligste arsaken er at tunneladressen har byttet: trycloudflare gir
@@ -714,9 +833,73 @@ function connect() {
       : `Får ikke kontakt med ${location.host}. ` +
         'Adressen kan ha endret seg — hent den nye med «bash deploy/status.sh» ' +
         'på maskinen som kjører serveren.';
-    setTimeout(connect, 1000);
+    // Rask forste gang, saa roligere: mange enheter som hamrer paa en server
+    // som starter opp gjor bare oppstarten tregere. Litt tilfeldighet saa de
+    // ikke kommer i samme millisekund.
+    setTimeout(connect, Math.min(1000 * reconnectTries, 5000) + Math.random() * 300);
   };
 }
+
+// Lukk pent naar fanen forsvinner, saa serveren faar vite det MED EN GANG i
+// stedet for naar pulsen gaar ut.
+addEventListener('pagehide', () => { try { ws?.close(1000, 'bye'); } catch {} });
+
+function listeningNow() { return !!ctx && uiJoined && !uiMuted; }
+
+// --- Hvem er her ------------------------------------------------------------
+function renderDevices() {
+  const admin = document.body.classList.contains('can-share');
+  const ul = $('devList');
+  ul.textContent = '';
+  // Den som deler forst, saa lyttere, saa de som bare har sida aapen.
+  const rank = d => d.sender ? 0 : d.listening ? 1 : 2;
+  for (const d of [...devices].sort((a, b) => rank(a) - rank(b) || a.since - b.since)) {
+    const li = document.createElement('li');
+    const n = document.createElement('span');
+    n.className = 'dn';
+    n.textContent = d.name || 'Unknown device';
+    if (d.id === clientId) {
+      const me = document.createElement('span');
+      me.className = 'me'; me.textContent = ' · this one';
+      n.append(me);
+    }
+    const st = document.createElement('span');
+    st.className = 'ds ' + (d.sender ? 's' : d.listening ? 'l' : '');
+    st.textContent = d.sender ? 'sharing' : d.listening ? 'listening' : 'page open';
+    li.append(n, st);
+    if (admin && d.id && d.id !== clientId) {
+      const b = document.createElement('button');
+      b.textContent = 'Remove';
+      b.onclick = () => send({ type: 'admin', action: 'kick', id: d.id });
+      li.append(b);
+    }
+    ul.append(li);
+  }
+  const idle = devices.length - listeningCount;
+  $('devSummary').textContent =
+    `${listeningCount} listening` + (idle > 0 ? ` · ${idle} with the page open` : '') +
+    (admin ? '' : ' · enter the room code under Share to manage devices');
+  $('stopSharingBtn').hidden = !(admin && broadcastActive);
+}
+
+$('stateBtn').onclick = () => {
+  $('myName').value = myName;
+  renderDevices();
+  document.body.classList.add('devices');
+};
+$('devicesClose').onclick = () => document.body.classList.remove('devices');
+$('myName').onchange = () => {
+  myName = $('myName').value.trim() || guessName();
+  $('myName').value = myName;
+  try { localStorage.setItem('wmName', myName); } catch {}
+  send({ type: 'state', name: myName });
+};
+$('stopSharingBtn').onclick = () => {
+  // Er det vi som sender, stopper vi lokalt ogsaa; ellers ber serveren den
+  // andre om aa stoppe og frigjor rollen uansett.
+  sender?.stop();
+  send({ type: 'admin', action: 'stop-sharing' });
+};
 
 function ping() {
   if (ws?.readyState === WebSocket.OPEN) {
@@ -1018,7 +1201,12 @@ $('shareBtn').onclick = async () => {
       audioClock,
       forcePcm: $('forcePcm').checked,
     });
-    sender.onstopped = () => { sender = null; updateStreamUI(); };
+    sender.onstopped = () => {
+      sender = null;
+      // Si fra med en gang, ellers staar rommet og venter paa taushetsgrensa.
+      send({ type: 'sharing-stopped' });
+      updateStreamUI(); renderDevices();
+    };
 
     // Senderen spiller sin EGEN strom, med samme bufferforsinkelse som alle
     // andre. Ellers ligger kilden alltid foran: ingenting forteller den at den
@@ -1258,15 +1446,23 @@ function paintFront() {
     : "hear what's playing";
   $('shareBlob').innerHTML = sender?.running ? 'Stop<br>sharing' : 'Share<br>to others';
 
+  if (ws?.readyState === 1 && listeningNow() !== sentListening) {
+    sentListening = listeningNow();
+    send({ type: 'state', listening: sentListening });
+  }
+
   const dot = $('dot'), txt = $('stateTxt');
+  if (kicked) { dot.className = 'dot warn2'; txt.textContent = 'Removed from the room — reload to rejoin'; return; }
   if (silentFor >= 3) return;              // la stille-meldinga staa
   dot.className = 'dot';
   if (!ws || ws.readyState !== 1) { txt.textContent = 'Not connected'; }
   else if (sender?.running) { dot.classList.add('live');
-    txt.textContent = `Sharing · ${peerCount} device${peerCount === 1 ? '' : 's'}`; }
+    const others = Math.max(0, listeningCount - 1);
+    txt.textContent = `Sharing · ${others} listening`; }
   else if (broadcastActive) { dot.classList.add('live');
-    txt.textContent = `Playing · ${peerCount} device${peerCount === 1 ? '' : 's'} in sync`; }
-  else { dot.classList.add('warn2'); txt.textContent = 'Connected · nobody streaming yet'; }
+    txt.textContent = `Playing · ${listeningCount} in sync`; }
+  else { dot.classList.add('warn2');
+    txt.textContent = `Nobody streaming · ${peerCount} here`; }
 
   const playing = uiJoined;
   document.body.classList.toggle('playing', playing);
@@ -1308,8 +1504,30 @@ function isChromium() {
   return /Chrome\//.test(navigator.userAgent) && !/OPR\/|Edg\//.test(navigator.userAgent);
 }
 
+function canShare() { return document.body.classList.contains('can-share'); }
+
+/** Delingsdialogen viser enten kodefeltet eller stegene — aldri begge. */
+function paintShareHelp() {
+  const locked = shareLocked && !canShare();
+  $('codeGate').hidden = !locked;
+  $('shareSteps').hidden = locked;
+  $('shareGo').textContent = locked ? 'Unlock' : 'Choose a tab';
+}
+
+function tryCode() {
+  const code = $('codeInput').value.trim();
+  if (!code) { $('codeHint').textContent = 'Type the room code first.'; return; }
+  shareKey = code;
+  try { localStorage.setItem('mr_key', shareKey); } catch {}
+  $('codeHint').textContent = 'Checking …';
+  if (ws?.readyState === 1) send({ type: 'auth', key: shareKey });
+  else $('codeHint').textContent = 'Not connected — try again in a moment.';
+}
+$('codeInput').onkeydown = (e) => { if (e.key === 'Enter') tryCode(); };
+
 $('shareBlob').onclick = () => {
   if (sender?.running) { $('shareBtn').click(); paintFront(); return; }
+  paintShareHelp();
   const w = $('shareWarn');
   if (isChromium()) w.hidden = true;
   else {
@@ -1321,6 +1539,7 @@ $('shareBlob').onclick = () => {
 };
 $('shareBack').onclick = () => document.body.classList.remove('sharing-help');
 $('shareGo').onclick = () => {
+  if (shareLocked && !canShare()) { tryCode(); return; }
   document.body.classList.remove('sharing-help');
   if (!ctx) { $('start').click(); uiJoined = true; }
   $('shareBtn').click();

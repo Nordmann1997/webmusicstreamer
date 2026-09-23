@@ -1,0 +1,1698 @@
+ <!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WebMultiroom</title>
+<style>
+  :root {
+    --sky:  #ead7bb;
+    --band: #f6edde;
+    --l1:   #cfa480;
+    --l2:   #8f7691;
+    --l3:   #4e4a70;
+    --ink:  #45325a;
+    --dim:  #7a6a78;
+    --blob: #fbf3e2;
+    /* Terrakottaen fra konseptbildet, dratt et par hakk morkere slik at hvit
+       tekst faar nok kontrast paa den. */
+    --accent:      #c2744a;
+    --accent-deep: #a95f3a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; overflow: hidden; color: var(--ink); background: var(--sky);
+    font: 16px/1.5 ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN",
+          Quicksand, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
+  /* Lavalampa tegnes i 132 piksler og strekkes av nettleseren. Skalering i
+     canvas kostet 9 bilder i sekundet paa retina; her gjor kompositoren det
+     samme paa GPU, gratis og med myk interpolasjon. */
+  #lava { display: none; }
+  body.m-lava #bg { display: none; }
+  body.m-lava #lava { display: block; }
+  /* GPU-versjonen tegner i full opplosning og trenger ingen strekking. */
+  #lavagl { display: none; }
+  body.m-lavagl #bg { display: none; }
+  body.m-lavagl #lavagl { display: block; }
+
+  /* Alt innhold i ett rutenett: tittel oppe, valg i midten, forsinkelse nede.
+     Midtraden tar plassen som blir til overs, sa bunnlinja staar stille naar
+     hoyden endrer seg. */
+  .page {
+    position: relative; z-index: 2; height: 100%;
+    display: grid; grid-template-rows: auto 1fr auto;
+    padding: max(18px, env(safe-area-inset-top)) 20px max(18px, env(safe-area-inset-bottom));
+    max-width: 900px; margin-inline: auto; text-align: center;
+  }
+
+  /* --- tittel ------------------------------------------------------------ */
+  header { padding-top: clamp(6px, 3vh, 26px); }
+  h1 {
+    margin: 0; font-weight: 800; letter-spacing: .01em; line-height: 1.05;
+    font-size: clamp(28px, 6.6vw, 56px);
+    color: var(--ink);
+  }
+  .tag { margin-top: 8px; font-size: clamp(13px, 1.9vw, 15px); color: var(--dim); }
+
+  /* --- midten ------------------------------------------------------------ */
+  .middle { display: grid; place-content: center; gap: clamp(16px, 3vh, 28px);
+            transition: opacity .24s ease; }
+
+  /* Bloben er rund, men ikke perfekt rund — ujevne hjorner gir den samme
+     handtegnede folelsen som flatene bak. */
+  /* Runde, ikke ovale. Den lille skjevheten i hjornene holder den handtegnede
+     folelsen, men formen er en sirkel — flate ovaler leste som knapper fra en
+     annen tid. Dybden kommer fra et lyspunkt oppe til venstre og en skygge som
+     ligger under, ikke fra en kant. */
+  .blob {
+    cursor: pointer; font: inherit; font-weight: 700; border: 0;
+    aspect-ratio: 1;
+    border-radius: 54% 46% 50% 50% / 50% 52% 48% 50%;
+    display: grid; place-content: center; gap: 3px; text-align: center;
+    transition: transform .18s cubic-bezier(.2,.9,.3,1.3), box-shadow .18s;
+    margin-inline: auto;
+  }
+  .blob:hover  { transform: translateY(-2px) scale(1.04); }
+  .blob:active { transform: scale(.96); }
+
+  .blob.primary {
+    width: clamp(124px, 27vw, 172px);
+    font-size: clamp(17px, 3.4vw, 24px);
+    color: #fff6ee;
+    background:
+      radial-gradient(120% 120% at 30% 22%, #d98d5e 0%, var(--accent) 46%, var(--accent-deep) 100%);
+    box-shadow: 0 18px 38px rgba(120,60,35,.34), 0 2px 0 rgba(255,255,255,.28) inset;
+  }
+  .blob.primary .sub { font-size: 12px; font-weight: 500; color: rgba(255,246,238,.86); }
+  /* Paa en liten sirkel brytes undertittelen over tre linjer og ser klemt ut.
+     Da er den bedre borte — «Join» sier nok alene. */
+  @media (max-width: 480px) { .blob.primary .sub { display: none; } }
+
+  .blob.secondary {
+    width: clamp(96px, 21vw, 128px);
+    font-size: clamp(12px, 2.1vw, 14px); font-weight: 700; line-height: 1.25;
+    color: var(--accent-deep);
+    background:
+      radial-gradient(120% 120% at 30% 22%, #ffffff 0%, var(--blob) 55%, #f3e6d2 100%);
+    border-radius: 48% 52% 54% 46% / 52% 48% 52% 48%;
+    box-shadow: 0 12px 28px rgba(120,60,35,.20), 0 0 0 2px rgba(194,116,74,.30) inset;
+  }
+
+  /* Statuslinja lander midt i soylene og forsvant i dem. En liten plate
+     gjor den lesbar uansett hvor hoyt de staar. */
+  .state {
+    font-size: 14px; color: var(--dim); min-height: 22px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: max-content; margin-inline: auto; padding: 5px 12px;
+    border-radius: 999px; background: rgba(251,243,226,.72);
+    backdrop-filter: blur(8px);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #b9a892; }
+  .dot.live { background: #4f9d69; }
+  .dot.warn { background: #c98a3a; }
+
+  /* --- bunnen: forsinkelse ----------------------------------------------- */
+  /* Bunnen ligger alltid oppa det morkeste laget, sa teksten trenger sin egen
+     flate for aa vaere lesbar uansett hvor hoyt nordlyset staar. */
+
+  /* --- utviklerknapp og skuff -------------------------------------------- */
+  #devBtn {
+    position: fixed; z-index: 4; right: 14px; top: max(14px, env(safe-area-inset-top));
+    background: rgba(251,243,226,.75); border: 1px solid rgba(78,74,112,.16);
+    color: var(--dim); border-radius: 10px; padding: 6px 10px; font: inherit;
+    font-size: 12px; cursor: pointer; backdrop-filter: blur(10px);
+  }
+  #dev {
+    position: fixed; z-index: 5; inset: auto 0 0 0; max-height: 82vh; overflow: auto;
+    background: #20182b; color: #efe6dc; border-radius: 16px 16px 0 0;
+    padding: 16px 18px max(18px, env(safe-area-inset-bottom));
+    transform: translateY(101%); transition: transform .26s cubic-bezier(.2,.8,.3,1);
+    box-shadow: 0 -12px 40px rgba(0,0,0,.35);
+  }
+  #dev.on { transform: none; }
+  #dev h2 { margin: 0 0 12px; font-size: 12px; letter-spacing: .12em;
+            text-transform: uppercase; color: #a294b0; font-weight: 700; }
+  #dev .close { position: absolute; right: 14px; top: 12px; background: none; border: 0;
+                color: #a294b0; font: inherit; font-size: 13px; cursor: pointer; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          gap: 1px; background: #2e2440; border: 1px solid #2e2440; border-radius: 10px;
+          overflow: hidden; }
+  .cell { background: #20182b; padding: 9px 11px; text-align: left; }
+  .cell .k { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #9186a0; }
+  .cell .v { font-size: 17px; font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .cell .n { font-size: 10px; color: #7d7290; }
+  .devrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            margin-top: 12px; font-size: 13px; color: #b7abc4; text-align: left; }
+  .devrow select, .devrow button {
+    background: #2b2138; color: #efe6dc; border: 1px solid #3a2e4c; border-radius: 8px;
+    padding: 6px 9px; font: inherit; font-size: 13px;
+  }
+  .devrow button { cursor: pointer; }
+  .ver { margin-top: 12px; font-size: 11px; color: #7d7290; }
+
+  /* Naar det spilles trekker kontrollene seg unna og lar flatene vaere i fred.
+     De kommer tilbake med Edit-knappen. */
+  .middle, #devBtn { transition: opacity .32s ease, transform .32s ease; }
+  body.hidden .middle { opacity: 0; pointer-events: none; transform: translateY(10px); }
+  body.playing:not(.open) #devBtn { opacity: 0; pointer-events: none; }
+
+  /* Hjornemerket er identiteten som blir staaende. Naar musikken gaar viker
+     den store tittelen, men sida skal fortsatt kunne fortelle hva den er. */
+  .mark {
+    position: fixed; z-index: 4; left: 16px; top: max(14px, env(safe-area-inset-top));
+    font-size: 14px; font-weight: 700; letter-spacing: .01em; color: var(--ink);
+    opacity: 0; transform: translateY(-6px);
+    transition: opacity .32s ease, transform .32s ease; pointer-events: none;
+  }
+  body.hidden .mark { opacity: .85; transform: none; }
+  body.hidden header { opacity: 0; pointer-events: none; transform: translateY(-10px); }
+  header { transition: opacity .32s ease, transform .32s ease; }
+
+  body.rave, body.disco { background: #07060c; }
+  body.rave .mark, body.disco .mark { color: #f2e9ff; opacity: .9; }
+  body.rave #editBtn, body.disco #editBtn {
+    background: rgba(20,16,30,.72); color: #f2e9ff; border-color: rgba(255,255,255,.22);
+  }
+  body.rave h1, body.rave .tag, body.rave .state,
+  body.disco h1, body.disco .tag, body.disco .state { color: #f2e9ff; }
+  /* Statusplata er lys som resten av sida. Paa mork bakgrunn maa den snu,
+     ellers staar det lys tekst paa lys flate. */
+  body.disco .state { background: rgba(20,16,30,.62); }
+
+  .drop {
+    position: fixed; inset: 0; z-index: 8; display: grid; place-items: center;
+    background: rgba(20,16,30,.72); color: #f6edde; font-size: 17px;
+    opacity: 0; pointer-events: none; transition: opacity .18s;
+  }
+  .drop.on { opacity: 1; }
+
+  /* Modusvelgeren nede til venstre, Edit nede til hoyre. To hjorner i stedet
+     for ett midtstilt punkt — paa en smal telefon kolliderte de ellers. */
+  /* Bobla vokser ut av Share-knappen i stedet for aa legge seg over sida som
+     et vindu. Samme form og farge som knappene, bare stor nok til alt. */
+  .bigblob {
+    position: fixed; left: 50%; top: 50%; z-index: 3;
+    width: min(430px, calc(100vw - 32px));
+    transform: translate(-50%, -50%) scale(.22);
+    transform-origin: 50% 50%;
+    background: var(--blob); color: var(--ink);
+    border-radius: 64px 54px 60px 52px;
+    border: 2px solid rgba(78,74,112,.14);
+    padding: 24px 24px 20px;
+    box-shadow: 0 22px 50px rgba(50,35,55,.26);
+    opacity: 0; pointer-events: none;
+    transition: transform .34s cubic-bezier(.2,.9,.3,1.15), opacity .22s ease;
+    max-height: 82vh; overflow: auto;
+  }
+  body.sharing-help #shareBlob,
+  body.asking      #syncBox {
+    opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1);
+  }
+  /* Knappene viker mens bobla staar der — det er den samme plassen. */
+  body.sharing-help .middle, body.asking .middle { opacity: 0; pointer-events: none; }
+
+  /* Toppen sto tom naar tittelen vek. Her staar det hva enheten gjor. */
+  .nowLabel {
+    position: fixed; z-index: 4; left: 0; right: 0;
+    top: max(26px, env(safe-area-inset-top));
+    text-align: center; font-weight: 800; letter-spacing: .01em;
+    font-size: clamp(26px, 5.2vw, 44px); color: var(--ink);
+    opacity: 0; transform: translateY(-8px); pointer-events: none;
+    transition: opacity .32s ease, transform .32s ease;
+  }
+  body.hidden .nowLabel { opacity: .92; transform: none; }
+  body.rave .nowLabel, body.disco .nowLabel { color: #f2e9ff; }
+
+  .bigblob .lab { display: flex; justify-content: space-between;
+                  font-size: 12px; color: var(--dim); margin-top: 4px; }
+  .bigblob .lab b { color: var(--ink); font-size: 14px; }
+  .bigblob input[type=range] { width: 100%; accent-color: var(--accent); height: 24px; }
+  /* Done mistet fargen sin da bunnkortet ble fjernet: knappen laa paa en
+     regel som het .foot .ok. Den hoerer til bobla naa. */
+  .bigblob > .ok, .bigblob .ok {
+    font: inherit; font-weight: 700; font-size: 15px; color: #fff6ee;
+    border: 0; border-radius: 16px; padding: 11px 14px; cursor: pointer;
+    background: linear-gradient(180deg, #cb7f55, var(--accent-deep));
+    box-shadow: 0 8px 18px rgba(120,60,35,.26);
+  }
+
+  /* Paa en smal skjerm staar hjornemerket og statusordet paa samme linje og
+     krangler. Statusen er det som gjelder mens musikken gaar. */
+  @media (max-width: 560px) { body.hidden .mark { opacity: 0; } }
+
+  .bigblob h2 { margin: 0 0 10px; font-size: 21px; font-weight: 800; }
+  .bigblob p { margin: 0 0 12px; font-size: 14px; line-height: 1.45; }
+  .bigblob ol { margin: 0 0 12px; padding-left: 20px; font-size: 14px; line-height: 1.5; }
+  .bigblob li { margin-bottom: 7px; }
+  .bigblob .fine { font-size: 12.5px; color: var(--dim); }
+  .bigblob .warn {
+    background: rgba(194,116,74,.14); border: 1px solid rgba(194,116,74,.42);
+    color: var(--accent-deep); border-radius: 14px; padding: 10px 12px;
+    font-size: 13.5px; line-height: 1.4; margin-bottom: 12px; font-weight: 600;
+  }
+  .row2 { display: flex; gap: 8px; margin-top: 4px; }
+  .row2 button { flex: 1; font: inherit; font-weight: 700; font-size: 15px;
+                 border-radius: 16px; padding: 11px 12px; cursor: pointer; border: 0; }
+  .row2 .ok { color: #fff6ee;
+              background: linear-gradient(180deg, #cb7f55, var(--accent-deep));
+              box-shadow: 0 8px 18px rgba(120,60,35,.26); }
+  .row2 .ghost { background: rgba(78,74,112,.10); color: var(--ink);
+                 border: 1px solid rgba(78,74,112,.20); }
+
+  #modes {
+    position: fixed; z-index: 4; left: 12px;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    display: flex; gap: 4px;
+  }
+  #modes button {
+    font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+    padding: 7px 10px; border-radius: 999px; color: var(--ink);
+    background: rgba(251,243,226,.62); border: 1px solid rgba(78,74,112,.16);
+    backdrop-filter: blur(10px); transition: background .15s, color .15s;
+  }
+  #modes button.on {
+    background: var(--accent); color: #fff6ee; border-color: transparent;
+  }
+  body.rave #modes button, body.disco #modes button {
+    background: rgba(20,16,30,.66); color: #f2e9ff; border-color: rgba(255,255,255,.20);
+  }
+  body.rave #modes button.on,
+  body.disco #modes button.on { background: #c2744a; color: #fff6ee; }
+
+  #editBtn {
+    position: fixed; z-index: 4; right: 12px;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    background: rgba(251,243,226,.86); border: 1px solid rgba(78,74,112,.20);
+    color: var(--ink); border-radius: 999px; padding: 9px 20px; font: inherit;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    box-shadow: 0 8px 22px rgba(50,35,55,.20); backdrop-filter: blur(10px);
+    opacity: 0; pointer-events: none; transition: opacity .32s ease;
+  }
+  body.playing:not(.open) #editBtn { opacity: 1; pointer-events: auto; }
+  /* Modusene er alltid tilgjengelige — det er hele poenget med dem. */
+
+  @media (orientation: landscape) and (min-width: 620px) {
+    .middle { grid-auto-flow: column; align-items: center; gap: 34px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="bg"></canvas>
+<canvas id="lava"></canvas>
+<canvas id="lavagl"></canvas>
+<div class="drop" id="drop">Drop an audio file to use it instead of the demo tone</div>
+<input type="file" id="file" accept="audio/*" hidden>
+
+<div class="mark">WebMultiroom</div>
+<div class="nowLabel" id="nowLabel">Playing</div>
+
+<div class="page">
+  <header>
+    <h1>WebMultiroom</h1>
+    <div class="tag">Transform your and your friends' computers<br>into multiroom speakers</div>
+  </header>
+
+  <div class="middle">
+    <div>
+      <button class="blob primary" id="joinBtn">
+        <span id="joinLabel">Join</span>
+        <span class="sub" id="joinSub">hear what's playing</span>
+      </button>
+      <div class="state" style="margin-top:14px">
+        <span class="dot" id="dot"></span><span id="stateTxt">Connecting …</span>
+      </div>
+    </div>
+
+    <button class="blob secondary" id="shareBtn"><span>Share<br>to others</span></button>
+  </div>
+
+</div>
+
+<div id="syncBox" class="bigblob">
+  <div id="syncAsk">
+    <h2>Is the music in sync?</h2>
+    <p>Listen to the rooms together. If one device is early or late, you can
+       nudge this one until they line up.</p>
+    <div class="row2">
+      <button class="ghost" id="syncNo">No, let me adjust</button>
+      <button class="ok" id="syncYes">Yes</button>
+    </div>
+  </div>
+  <div id="syncTune" hidden>
+    <h2>Adjust this device</h2>
+    <p class="fine2">Bluetooth speakers usually need a nudge later. Only this
+       device changes — the others stay where they are.</p>
+    <div class="lab"><span>Earlier</span><span><b id="fineVal">0</b> ms</span><span>Later</span></div>
+    <input type="range" id="fine" min="-150" max="150" step="1" value="0">
+    <button class="ok" id="okBtn" style="width:100%;margin-top:12px">Done</button>
+  </div>
+</div>
+
+<div id="shareBlob" class="bigblob">
+  <h2>Share your audio</h2>
+  <div class="warn" id="shareWarn" hidden></div>
+  <p>Whatever plays on this computer becomes the stream. Everyone who joins
+     hears the same thing at the same moment.</p>
+  <ol>
+    <li>Pick <b>Chrome Tab</b> in the dialog — not a window, not the whole screen.
+        Only a tab can carry sound.</li>
+    <li>Tick <b>Also share tab audio</b> in the corner of that dialog. It is easy
+        to miss, and without it the stream is silent.</li>
+    <li>Play the music in that tab. Spotify, YouTube, anything.</li>
+  </ol>
+  <p class="fine">To share sound from an app instead of a tab, route it through a
+     loopback input and pick <b>Audio input</b> in the developer panel.</p>
+  <div class="row2">
+    <button class="ghost" id="shareCancel">Back</button>
+    <button class="ok" id="shareGo">Choose a tab</button>
+  </div>
+</div>
+
+<div id="modes">
+  <button data-mode="aurora">Aurora</button>
+  <button data-mode="lava">Lava</button>
+  <button data-mode="lavagl">Lava GL</button>
+  <button data-mode="bars" class="on">Bars</button>
+  <button data-mode="rave">Rave</button>
+  <button data-mode="disco">Disco</button>
+</div>
+
+<button id="editBtn">Edit</button>
+<button id="devBtn">Developer</button>
+
+<div id="dev">
+  <button class="close" id="devClose">Close</button>
+  <h2>Developer</h2>
+  <div class="grid">
+    <div class="cell"><div class="k">Clock offset</div><div class="v" id="d_offset">—</div><div class="n">server − local</div></div>
+    <div class="cell"><div class="k">Uncertainty</div><div class="v" id="d_unc">—</div><div class="n">half the lowest RTT</div></div>
+    <div class="cell"><div class="k">RTT</div><div class="v" id="d_rtt">—</div><div class="n">lowest / latest</div></div>
+    <div class="cell"><div class="k">System clock</div><div class="v" id="d_skew">—</div><div class="n">my rate vs. server</div></div>
+    <div class="cell"><div class="k">Audio clock</div><div class="v" id="d_drift">—</div><div class="n">DAC vs. system clock</div></div>
+    <div class="cell"><div class="k">Output latency</div><div class="v" id="d_lat">—</div><div class="n">reported by the browser</div></div>
+    <div class="cell"><div class="k">Compensation</div><div class="v" id="d_comp">—</div><div class="n">actually applied</div></div>
+    <div class="cell"><div class="k">Time source</div><div class="v" id="d_src" style="font-size:14px">—</div><div class="n">for the audio clock</div></div>
+    <div class="cell"><div class="k">Codec</div><div class="v" id="d_codec" style="font-size:14px">—</div><div class="n" id="d_rate">—</div></div>
+    <div class="cell"><div class="k">Bandwidth</div><div class="v" id="d_kbps">—</div><div class="n">incoming</div></div>
+    <div class="cell"><div class="k">Packets</div><div class="v" id="d_pkt">—</div><div class="n">played / received</div></div>
+    <div class="cell"><div class="k">Late</div><div class="v" id="d_late">—</div><div class="n">dropped · resync <span id="d_resync">—</span></div></div>
+    <div class="cell"><div class="k">Errors</div><div class="v" id="d_err">—</div><div class="n" id="d_errnote">decode / copy / packet</div></div>
+    <div class="cell"><div class="k">Drift correction</div><div class="v" id="d_dr">—</div><div class="n">samples · median error</div></div>
+    <div class="cell"><div class="k">Frame</div><div class="v" id="d_fps">—</div><div class="n">fps · ms per frame</div></div>
+    <div class="cell"><div class="k">Devices</div><div class="v" id="d_peers">—</div><div class="n">connected</div></div>
+    <div class="cell"><div class="k">Bass</div><div class="v" id="d_bass">—</div><div class="n">sub-nivaa → utslag</div></div>
+  </div>
+
+  <div class="devrow">
+    <span>Audio source</span>
+    <select id="d_mode">
+      <option value="display">Screen or tab</option>
+      <option value="input">Audio input (loopback)</option>
+    </select>
+    <label><input type="checkbox" id="d_pcm"> Raw PCM</label>
+    <label><input type="checkbox" id="d_here" checked> Play here too</label>
+  </div>
+  <div class="devrow">
+    <span>Fine-tune <b id="d_nudgeval">0</b> ms</span>
+    <input type="range" id="d_nudge" min="-60" max="60" step="1" value="0" style="flex:1;min-width:160px">
+    <button id="d_measure">Measure with microphone</button>
+  </div>
+  <div class="devrow">
+    <span>Audio</span>
+    <button id="pickBtn">Load a song…</button>
+    <button id="demoBtn">Demo tone</button>
+    <span id="nowFile" style="color:#8a7e99">demo tone</span>
+  </div>
+  <div class="devrow">
+    <span>Buffer <b id="d_bufval">1000</b> ms</span>
+    <input type="range" id="d_buf" min="200" max="3000" step="100" value="1000"
+           style="flex:1;min-width:160px">
+  </div>
+  <div class="devrow">
+    <span style="color:#8a7e99">Demo:</span>
+    <button data-demo="idle">Offline</button>
+    <button data-demo="ready">Connected</button>
+    <button data-demo="playing">Playing</button>
+    <button data-demo="sharing">Sharing</button>
+  </div>
+  <div class="ver" id="d_ver">ui-lab · local test page</div>
+</div>
+
+<script>
+// ===========================================================================
+//  Nordlys — samme oppsett som public/visual.js, men matet av demolyd her
+// ===========================================================================
+const cv = document.getElementById('bg');
+const g  = cv.getContext('2d', { alpha: false });
+let W = 0, H = 0, DPR = 1;
+
+// Tittelen skal aldri bli spist av et lag som beveger seg. Ingen flate faar
+// komme hoyere enn dette; over streken er det bare himmel.
+// Brukes av Bars: soylene skal ikke naa opp i tittelen.
+let TOP_LIMIT = 0.22;
+function setTopLimit(playing) { TOP_LIMIT = playing ? 0.10 : 0.22; }
+
+const P = { sky:'#ead7bb', band:'#f6edde', l1:'#cfa480', l2:'#8f7691', l3:'#4e4a70' };
+const ACCENT = '#c2744a';
+
+// Faste verdier fra testinga i visual-lab: styrke 0,6, ro 0,69, 30 bilder.
+const GAIN = 0.6, SMOOTH = 0.69;
+
+// Bildefrekvens per modus, valgt etter MAALT kostnad. En kule som glir
+// jevnt avsloerer 30 bilder i sekundet med en gang — hver posisjon holdes i
+// to skjermbilder, og det leses som hakking. Flatene i Aurora og soylene i
+// Bars koster 0,1 ms, saa 60 er gratis der. Lavalampa koster 1,5 ms og faar
+// bli paa 30: der er det ingenting som glir raskt nok til at det syns.
+const FPS_FOR = { aurora: 60, bars: 60, rave: 60, disco: 60, lava: 30, lavagl: 60 };
+let FPS = 60;
+
+const S  = { kick:0, mid:0, air:0, hitKick:0, hitMid:0, hitAir:0, phase:0, sub:0 };
+// Maa staa FOR alt som bruker dem: en const kan ikke leses for linja er kjort,
+// og kulene i lavalampa bygges naar skriptet lastes.
+const EDGES = [20, 70, 160, 280, 480, 820, 1400, 2400, 4100, 7000, 14000];
+const NB = EDGES.length - 1;
+const NBV = 10;
+const BV  = new Float32Array(NBV);             // utjevnet nivaa per baand
+const BY  = new Float32Array(NBV);             // hoyde
+const BPK = new Float32Array(NBV);             // topphold for soylene
+let MODE = 'bars';
+
+function resize() {
+  // Tak paa opplosning: en telefon med dpr 3 har ni ganger saa mange piksler
+  // som du trenger. Dette er den storste enkeltbesparelsen.
+  DPR = Math.min(devicePixelRatio || 1, 2);
+  W = Math.round(innerWidth * DPR); H = Math.round(innerHeight * DPR);
+  cv.width = W; cv.height = H;
+}
+addEventListener('resize', resize); resize();
+
+// Aa dele paa en TOPPFOLGER var feilen. Toppen settes av det hardeste slaget,
+// og saa lenge laata fortsetter i samme styrke ligger hvert eneste slag paa
+// 1,0 — bildet staar stille paa maks, som du saa i Gorillaz-introen.
+//
+// Naa deles det paa et SNITT, og resultatet sendes gjennom en myk kompressor:
+//     e = x / (x + K),   x = raw / snitt
+// Den naar aldri 1. Snittnivaa gir 0,31, et hardt slag 0,73, et virkelig
+// voldsomt 0,85 — det er alltid noe igjen aa gi, og forskjellen mellom hardt
+// og hardere er fortsatt synlig.
+const KNEE = 2.2;
+const AVG = { kick: 0.02, mid: 0.01, air: 0.003 };
+const BAV = new Float32Array(NBV).fill(0.01);
+
+function compress(raw, ref) {
+  const x = raw / (ref + 1e-5);
+  return x / (x + KNEE);
+}
+function rel(key) {
+  const raw = S[key];
+  // Stiger litt raskere enn den faller, saa et stille parti ikke blaser opp
+  // stoygulvet til «musikk».
+  AVG[key] += (raw > AVG[key] ? 0.004 : 0.0015) * (raw - AVG[key]);
+  return compress(raw, AVG[key]);
+}
+// --- baandnivaaene, regnet EN gang per bilde ------------------------------
+// Her laa en feil som gjorde alt annet meningslost: bandRel oppdaterte det
+// glidende snittet HVER GANG den ble kalt. Lavaen kaller den en gang per kule
+// — atten ganger i bildet, alle paa samme baand naar LAVA_BANDS er 1 — og da
+// loper snittet atten ganger for fort. Det klistrer seg til signalet, forholdet
+// mellom dem blir tilnaermet konstant, og utslaget staar stille uansett hvor
+// mye eller lite bass det er. Derfor saa du ingen forskjell paa gulvet.
+//
+// Naa oppdateres alle baand en gang i sloyfa, og bandRel bare leser av.
+const BREL = new Float32Array(NBV);    // utslag per baand
+function updateBands(dt) {
+  for (let n = 0; n < NBV; n++) {
+    const raw = BV[n];
+    BAV[n] += (raw > BAV[n] ? 0.004 : 0.0015) * (raw - BAV[n]);
+    BREL[n] = compress(raw, BAV[n]);
+  }
+}
+
+function bandRel(n) { return BREL[n]; }
+
+// Tre store flater som tar hele skjermen, over sandfarget himmel. Boelgen
+// har tre romlige frekvenser som driver hver sin vei, saa formen ENDRER seg
+// over bredden i stedet for bare aa flytte paa seg.
+const AUR = [
+  { lvl:'air',  hit:'hitAir',  col:'l1', y:0.42, lift:0.14, amp:0.055, sp:0.058,
+    w1:1.9, w2:4.1, w3:7.3, ph:0.0, snap:0.034 },
+  { lvl:'mid',  hit:'hitMid',  col:'l2', y:0.66, lift:0.13, amp:0.050, sp:0.046,
+    w1:2.4, w2:5.1, w3:8.7, ph:2.1, snap:0.030 },
+  { lvl:'kick', hit:'hitKick', col:'l3', y:0.86, lift:0.15, amp:0.044, sp:0.036,
+    w1:1.5, w2:3.3, w3:6.1, ph:4.2, snap:0.042 },
+];
+const AS = AUR.map(() => 0), AJ = AUR.map(() => 0);
+
+/** Tre romlige frekvenser, hver sin driftretning. */
+function aurWave(b, u, t, amp) {
+  return Math.sin(u * b.w1 * Math.PI + t * b.sp * 6.5 + b.ph) * amp
+       + Math.sin(u * b.w2 * Math.PI - t * b.sp * 4.2 + b.ph * 1.7) * amp * 0.50
+       + Math.sin(u * b.w3 * Math.PI + t * b.sp * 2.3 + b.ph * 0.6) * amp * 0.26;
+}
+
+function draw(dt) {
+  const kk = 1 - Math.exp(-dt / (300 + SMOOTH * 1900));
+  const kj = 1 - Math.exp(-dt / 90);
+  const t = S.phase;
+
+  g.fillStyle = P.sky; g.fillRect(0, 0, W, H);
+  const step = Math.max(5, Math.round(W / 130));
+
+  for (let i = 0; i < AUR.length; i++) {
+    const b = AUR[i];
+    AS[i] += (rel(b.lvl) - AS[i]) * kk;
+    AJ[i] += (Math.min(1.4, S[b.hit]) - AJ[i]) * kj;
+    const e = AS[i], j = AJ[i];
+
+    let cy = b.y - (b.lift * e + b.snap * j) * GAIN;
+    const amp = b.amp * (0.55 + e * 1.45 * GAIN + j * 0.55);
+    // Hold flatene under tittelsona uansett hvor hardt det spilles.
+    cy = Math.max(cy, TOP_LIMIT + amp * 1.9);
+
+    g.fillStyle = P[b.col];
+    g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + step; x += step) {
+      g.lineTo(x, H * (cy + aurWave(b, x / W, t, amp)));
+    }
+    g.lineTo(W + step, H); g.closePath(); g.fill();
+  }
+}
+
+// ===========================================================================
+//  Rave — hypnose, ikke konfetti
+// ===========================================================================
+// Tre valg gjor forskjellen paa klubb og barnebursdag:
+//   ett fargepar, ikke seks. Regnbue leser som leketoy; to komplementaere
+//   neonfarger som driver sakte i nyanse leser som lys i et rom.
+//   geometri som gjentar seg innover. En tunnel med eksponentiell avstand
+//   mellom ringene gir perspektiv, og oyet finner ingen bunn aa hvile paa.
+//   etterslep. Vi visker ikke ut bildet, vi legger et halvgjennomsiktig
+//   morkt lag over. Alt som beveger seg drar en hale, og det er halen som
+//   gjor det hypnotisk framfor blinkende.
+const RINGS_N = 18, SIDES = 6;
+let tunnel = 0, rot = 0, hue = 312, spokeTurn = 0;
+let strobe = 0, lastStrobe = 0;
+let prevKick = 0, prevAir = 0;
+
+/** Et slag er en KANT. hitX siger sakte ned etter et treff, saa «er den hoy?»
+ *  ville utlost paa nytt hver eneste ramme. Vi ser etter oppgangen. */
+function rose(v, prev, thr) { return (v > prev + thr && v > thr * 1.6) ? v : 0; }
+
+function drawRave(dt) {
+  const s = Math.min(dt, 50) / 1000;
+  const now = performance.now();
+
+  const bass = bandRel(0) * 0.6 + bandRel(1) * 0.4;
+  const mid  = bandRel(4) * 0.5 + bandRel(5) * 0.5;
+  const air  = bandRel(8) * 0.5 + bandRel(9) * 0.5;
+
+  // Etterslep i stedet for full utvisking.
+  g.fillStyle = 'rgba(3,2,7,0.34)';
+  g.fillRect(0, 0, W, H);
+
+  hue    += s * 4 * (0.4 + mid);              // nyansen driver, den hopper ikke
+  tunnel += s * (0.35 + bass * 2.2) * GAIN;
+  rot    += s * (0.10 + mid * 0.55);
+
+  const A = `hsl(${(hue        ) % 360} 100% 58%)`;
+  const B = `hsl(${(hue + 168) % 360} 100% 54%)`;
+
+  const cx = W / 2, cy = H / 2;
+  const maxR = Math.hypot(W, H) * 0.62;
+
+  g.globalCompositeOperation = 'lighter';
+  g.lineJoin = 'round';
+
+  // --- tunnelen ------------------------------------------------------------
+  for (let i = 0; i < RINGS_N; i++) {
+    const f = ((i + tunnel) % RINGS_N) / RINGS_N;
+    const r = Math.pow(f, 2.4) * maxR;
+    if (r < 6) continue;
+    // Toner inn naer midten og ut mot kanten, saa ingen ring popper.
+    const fade = Math.min(1, f * 5) * Math.min(1, (1 - f) * 3.2);
+    g.globalAlpha = (0.10 + bass * 0.34) * fade;
+    g.strokeStyle = i % 2 ? A : B;
+    g.lineWidth = Math.max(1, H * (0.004 + f * 0.010) * (1 + bass * 0.7));
+
+    // Hver ring er vridd litt mer enn den forrige. Vridningen er det som
+    // gjor tunnelen til en spiral oyet ikke slipper.
+    const a0 = rot + f * 1.9;
+    g.beginPath();
+    for (let k = 0; k <= SIDES; k++) {
+      const a = a0 + k / SIDES * Math.PI * 2;
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r * 0.92;
+      k === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+
+  // --- radialt spekter: ti baand speilet rundt sirkelen --------------------
+  const r0 = Math.min(W, H) * 0.13;
+  const spokes = NBV * 2;
+  g.lineCap = 'round';
+  for (let k = 0; k < spokes; k++) {
+    const n = k < NBV ? k : spokes - 1 - k;
+    const v = Math.min(1, bandRel(n) * GAIN * 1.6);
+    BY[n] += (v - BY[n]) * (1 - Math.exp(-dt / 50));
+    const len = Math.min(W, H) * (0.02 + BY[n] * 0.30);
+    const a = spokeTurn + (k + 0.5) / spokes * Math.PI * 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    g.globalAlpha = 0.45 + BY[n] * 0.5;
+    g.strokeStyle = k % 2 ? A : B;
+    g.lineWidth = Math.max(2, Math.min(W, H) * 0.012);
+    g.beginPath();
+    g.moveTo(cx + ca * r0, cy + sa * r0);
+    g.lineTo(cx + ca * (r0 + len), cy + sa * (r0 + len));
+    g.stroke();
+  }
+  spokeTurn += s * (0.15 + air * 0.9);
+
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
+
+  // --- strobe --------------------------------------------------------------
+  // Sperren paa 320 ms er ikke pynt. Blink mellom fem og tretti ganger i
+  // sekundet er omraadet som utloser anfall hos lysfolsomme; tre i sekundet
+  // holder seg trygt under, og treffer uansett hardere fordi hvert blink
+  // lander paa et slag i stedet for aa bli en jevn susing.
+  const kickHit = rose(S.hitKick, prevKick, 0.35); prevKick = S.hitKick;
+  const airHit  = rose(S.hitAir,  prevAir,  0.50); prevAir  = S.hitAir;
+  if ((kickHit || airHit) && now - lastStrobe > 320) {
+    strobe = kickHit ? 1 : 0.5;
+    lastStrobe = now;
+    spokeTurn += Math.PI / NBV;              // hjulet hakker et hakk videre
+  }
+  strobe *= Math.pow(0.0012, s);
+  if (strobe > 0.02) {
+    // Fargen fra paletten, ikke hvitt. Hvitt blink leser som en feil i
+    // skjermen; et farget blink leser som lys.
+    g.fillStyle = `hsla(${(hue + 168) % 360} 100% 62% / ${(strobe * 0.30).toFixed(3)})`;
+    g.fillRect(0, 0, W, H);
+  }
+}
+
+// ===========================================================================
+//  Lavalampe — metaballs, regnet i lav opplosning
+// ===========================================================================
+// Ekte metaballs betyr aa regne ut et felt for HVER piksel. Paa en retina-
+// skjerm er det fem millioner punkter ganger ti kuler, seksti ganger i
+// sekundet — helt utelukket i JavaScript.
+//
+// Trikset: feltet er glatt og har ingen detaljer. Vi regner det derfor i
+// 132 piksler bredde — under ti tusen punkter — og lar nettleseren skalere
+// bildet opp med interpolasjon. Oppskaleringa gjor kantene myke gratis, og
+// mykhet er nettopp det en lavalampe skal ha. Kostnaden blir den samme
+// enten sida staar paa en telefon eller en 5K-skjerm.
+// Vi tegner IKKE lavalampa opp i full storrelse selv. Forste forsok gjorde
+// det med drawImage, og paa 5,2 megapiksler ga 'high' ni bilder i sekundet,
+// 'medium' atten og 'low' tretti — mens JS-timeren viste 0,4 ms i alle tre,
+// fordi skaleringa skjer utenfor koden min. Losninga er aa la CSS strekke
+// lerretet: da gjor kompositoren jobben paa GPU, mykt og gratis.
+const LAVA_W = 260;
+const LAVA_REACH = 3.4;
+let lavaCv = null, lavaG = null, lavaImg = null, lavaH = 0;
+
+const NBLOB = 22;
+
+// --- hvor livlig lavaen er ------------------------------------------------
+// En lavalampe skal bevege seg som varm voks, ikke som en spektrumanalysator.
+// Kulene fulgte foer hele spekteret opp til 14 kHz, og halvparten av dem hang
+// dermed paa hi-hats og stemmer — mange skift i sekundet, som leses som uro.
+//
+// Kulene henger i en fjaer festet i bassnivaaet. Ingen deteksjon, ingen
+// terskler, ingenting som kan ta feil — bare et tall og en fjaer.
+//
+// Baandet er smalt med vilje: 18-35 Hz og 50-85 Hz, altsaa selve slaget.
+// Ingen bassgang, ingen stemmer, ingen cymbaler. Maalt paa to ekte laater
+// ligger medianen paa 0,04-0,07 og toppene rundt 0,13, som er der REF staar.
+const LAVA_REF  = 0.11;    // nivaaet som gir fullt utslag
+const LAVA_K    = 142;      // fjaerstivhet: hoyere = kvikkere, mer nervos
+const LAVA_ZETA = 0.82;    // demping. 1 = ingen svai, under 1 gir ettersleng
+const LAVA_SIZE = 0.55;    // hvor mye utslaget oeker stoerrelsen
+const LAVA_LIFT = 0.90;    // hvor mye det dytter kula oppover
+const LAVA_BASE = 0.60;    // fart uten musikk
+
+const _frac = v => v - Math.floor(v);
+const _hash = (i, k) => _frac(Math.sin(i * 127.1 + k * 311.7) * 43758.5453);
+const BLOBS = Array.from({ length: NBLOB }, (_, i) => ({
+  x: 0.06 + _hash(i, 1) * 0.88,
+  y: _hash(i, 2),
+  vy: (_hash(i, 3) < 0.5 ? -1 : 1) * (0.016 + _hash(i, 4) * 0.022),
+  r: 0.034 + _hash(i, 5) * 0.034,
+  kick: 0.7 + _hash(i, 6) * 0.6,   // egen fjaerstivhet, saa de ikke gaar i takt
+  sp: 0, sv: 0,                    // fjaerposisjon og -fart
+  ph: i * 1.9,
+}));
+const LAVA_IDX = new Int32Array(NBLOB);
+
+// Fire nivaaer i paletten, men med MYK overgang mellom dem. Med hardt skille
+// faller trappetrinnene fra lavopplosninga rett i oynene; naar overgangen
+// smores over et lite intervall av feltverdien blir kanten et par piksler
+// bred allerede for oppskaleringa, og trappa forsvinner.
+const LAVA_STOPS = [0.90, 1.45, 2.40];
+const LAVA_SOFT  = [0.30, 0.45, 0.70];
+let lavaRGB = null;
+function lavaColours() {
+  const hex = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  lavaRGB = [hex(P.sky), hex(P.l1), hex(P.l2), hex(P.l3)];
+}
+
+function lavaSetup() {
+  lavaH = Math.max(24, Math.round(LAVA_W * H / W));
+  lavaCv = document.getElementById('lava');
+  lavaCv.width = LAVA_W; lavaCv.height = lavaH;
+  lavaG = lavaCv.getContext('2d');
+  lavaImg = lavaG.createImageData(LAVA_W, lavaH);
+  for (let i = 3; i < lavaImg.data.length; i += 4) lavaImg.data[i] = 255;
+  lavaColours();
+}
+
+// Bevegelsen er den samme enten feltet regnes i JS eller i en shader. Den
+// ligger derfor for seg selv, saa de to modusene ikke kan drive fra hverandre
+// og sammenlikningen faktisk maaler det den skal: kostnaden ved aa TEGNE.
+
+
+// Fjaer med demping, per kule. Kraften er (maal - posisjon) * stivhet, minus
+// fart * demping — samme ligning som en fjaer med en dempesylinder. Utslaget
+// kan ikke hoppe, for det maa gjennom en akselerasjon foerst, og det er
+// nettopp derfor det ser mykt ut uten aa henge etter.
+function moveBlobs(dt) {
+  const s = Math.min(dt, 50) / 1000;
+  const D = 2 * LAVA_ZETA * Math.sqrt(LAVA_K);
+  const maal = Math.min(1.4, S.sub / LAVA_REF);
+
+  for (let i = 0; i < NBLOB; i++) {
+    const b = BLOBS[i];
+
+    // Hver kule har sin egen stivhet (0,7-1,3 av grunnverdien), saa de ikke
+    // beveger seg som ett stykke. Ingen tilfeldighet i sanntid — faktoren er
+    // fast per kule, saa bevegelsen er den samme hver gang.
+    b.sv += ((maal - b.sp) * LAVA_K * b.kick - b.sv * D) * s;
+    b.sp += b.sv * s;
+    const e = b.sp < 0 ? 0 : b.sp;
+
+    b.y += b.vy * s * (LAVA_BASE + e * LAVA_LIFT);
+    if (b.y < -0.18) { b.y = 1.18; }
+    if (b.y >  1.18) { b.y = -0.18; }
+    b.x += Math.sin(S.phase * 0.5 + b.ph) * s * 0.02;
+    if (b.x < 0.05) b.x = 0.05; if (b.x > 0.95) b.x = 0.95;
+    b.rNow = b.r * (0.72 + e * LAVA_SIZE);
+  }
+}
+
+function drawLava(dt) {
+  if (!lavaImg || lavaH !== Math.max(24, Math.round(LAVA_W * H / W))) lavaSetup();
+  moveBlobs(dt);
+
+  // --- feltet -----------------------------------------------------------
+  const d = lavaImg.data;
+  const ar = lavaH / LAVA_W;                 // regn i x-enheter, sa kulene blir runde
+  let p = 0;
+  for (let py = 0; py < lavaH; py++) {
+    const fy = (py + 0.5) / lavaH * ar;
+    let m = 0;
+    for (let i = 0; i < NBLOB; i++) {
+      const dy = fy - BLOBS[i].y * ar, reach = BLOBS[i].rNow * LAVA_REACH;
+      if (dy > -reach && dy < reach) LAVA_IDX[m++] = i;
+    }
+    for (let px = 0; px < LAVA_W; px++) {
+      const fx = (px + 0.5) / LAVA_W;
+      let f = 0;
+      for (let j = 0; j < m; j++) {
+        const b = BLOBS[LAVA_IDX[j]];
+        const dx = fx - b.x, dy = fy - b.y * ar;
+        // r^2/d^2: ingen kvadratrot, og summen gjor at to kuler smelter
+        // sammen naar de naermer seg — det er hele metaball-effekten.
+        f += b.rNow * b.rNow / (dx * dx + dy * dy + 0.0006);
+      }
+      // Finn hvilket par av farger punktet ligger mellom, og hvor langt.
+      let k = 0, u2 = 0;
+      if (f >= LAVA_STOPS[2]) { k = 3; u2 = 0; }
+      else if (f >= LAVA_STOPS[1]) { k = 2; u2 = (f - LAVA_STOPS[1]) / (LAVA_STOPS[2] - LAVA_STOPS[1] + LAVA_SOFT[2]); }
+      else if (f >= LAVA_STOPS[0]) { k = 1; u2 = (f - LAVA_STOPS[0]) / (LAVA_STOPS[1] - LAVA_STOPS[0] + LAVA_SOFT[1]); }
+      else { k = 0; u2 = f / (LAVA_STOPS[0] + LAVA_SOFT[0]); }
+      u2 = u2 < 0 ? 0 : u2 > 1 ? 1 : u2;
+      u2 = u2 * u2 * (3 - 2 * u2);                    // mykt inn og ut
+      const a = lavaRGB[k], bcol = lavaRGB[k < 3 ? k + 1 : 3];
+      d[p]   = a[0] + (bcol[0] - a[0]) * u2;
+      d[p+1] = a[1] + (bcol[1] - a[1]) * u2;
+      d[p+2] = a[2] + (bcol[2] - a[2]) * u2;
+      p += 4;
+    }
+  }
+  lavaG.putImageData(lavaImg, 0, 0);
+}
+
+// ===========================================================================
+//  Lavalampe paa GPU — samme felt, regnet per piksel i en shader
+// ===========================================================================
+// Noyaktig samme matematikk som over: sum av r^2/d^2, samme fire farger,
+// samme myke overganger. Forskjellen er HVOR den regnes.
+//
+// JS-versjonen regner 260 x ~150 punkter og lar CSS strekke bildet. Den er
+// billig fordi den er liten, og grov av samme grunn. Shaderen regner hvert
+// eneste skjermpunkt — fem millioner paa en retina-skjerm — men gjor det paa
+// GPU-en, som har tusenvis av kjerner staaende ledige mens hovedtraden vaar
+// holder paa med lyd. Hovedtraden gjor her bare atten kuler fysikk og ett
+// draw-kall.
+//
+// MERK ved maaling: frameMs teller bare JS-tid, og drawArrays returnerer for
+// GPU-en har begynt. Tallet blir derfor naer null uansett hvor tungt det er.
+// Det er samme felle som drawImage-forsoket: bildefrekvensen er det eneste
+// aerlige maalet her.
+const GLB = new Float32Array(NBLOB * 3);
+let glCv = null, gl = null, glProg = null, glLoc = null;
+let glLost = false, glDead = false;
+
+// Flat, som i forbildet: ingen mykt gloedeomraade, ingen fargetrapp. Ett
+// hardt skille mellom bakgrunn og lava, og lavaen har en loddrett overgang
+// mellom to farger over hele flata. Det er den rene versjonen.
+const LAVA_T = 1.15;        // feltverdien der lavaen begynner — «klebrighet»
+let glDeriv = false;        // kan GPU-en regne ut kantbredden selv?
+
+const LAVA_VS = `
+attribute vec2 aPos;
+varying vec2 vUV;
+void main() {
+  // y speiles: JS-feltet har rad 0 overst, WebGL har origo nederst.
+  vUV = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+// Kanten er det eneste stedet vi jukser. Et helt hardt skille gir trappetrinn
+// paa skraa kanter. fwidth() sier hvor mye feltet endrer seg fra en piksel til
+// naboen, og gjor overgangen noeyaktig én piksel bred uansett om kula er stor
+// eller liten — skarpt, men uten trapp. Uten den utvidelsen faller vi tilbake
+// paa et fast lite intervall, som er litt mykere paa store kuler.
+function lavaFS() {
+  const kant = glDeriv
+    ? '  float w = max(fwidth(f), 1e-5);\n  float a = smoothstep(T - w, T + w, f);'
+    : '  float a = smoothstep(T - 0.045, T + 0.045, f);';
+  return (glDeriv ? '#extension GL_OES_standard_derivatives : enable\n' : '') + `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUV;
+uniform vec3 uBlob[${NBLOB}];        // x, y, radius
+uniform vec3 uTop;                   // lavafarge oeverst
+uniform vec3 uBot;                   // lavafarge nederst
+uniform vec3 uBg;
+uniform float uAR;
+const float T = ${LAVA_T.toFixed(3)};
+void main() {
+  float fx = vUV.x;
+  float fy = vUV.y * uAR;            // regn i x-enheter, saa kulene blir runde
+  float f = 0.0;
+  for (int i = 0; i < ${NBLOB}; i++) {
+    float dx = fx - uBlob[i].x;
+    float dy = fy - uBlob[i].y * uAR;
+    f += uBlob[i].z * uBlob[i].z / (dx * dx + dy * dy + 0.0006);
+  }
+${kant}
+  gl_FragColor = vec4(mix(uBg, mix(uTop, uBot, vUV.y), a), 1.0);
+}`;
+}
+
+function glShader(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    console.error('shader:', gl.getShaderInfoLog(sh));
+    gl.deleteShader(sh);
+    return null;
+  }
+  return sh;
+}
+
+// Bygger opp alt som forsvinner naar konteksten mistes. Kalles paa nytt
+// etter webglcontextrestored, saa et GPU-reset ikke gir svart skjerm.
+function lavaGLInit() {
+  if (glDead || glLost) return false;
+  if (gl && glProg) return true;
+
+  glCv = document.getElementById('lavagl');
+  if (!gl) {
+    gl = glCv.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false })
+      || glCv.getContext('experimental-webgl');
+    if (!gl) { glDead = true; return false; }
+    glCv.addEventListener('webglcontextlost', e => { e.preventDefault(); glLost = true; glProg = null; });
+    glCv.addEventListener('webglcontextrestored', () => { glLost = false; glProg = null; });
+  }
+
+  glDeriv = !!gl.getExtension('OES_standard_derivatives');
+  const vs = glShader(gl.VERTEX_SHADER, LAVA_VS);
+  const fs = glShader(gl.FRAGMENT_SHADER, lavaFS());
+  if (!vs || !fs) { glDead = true; return false; }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('link:', gl.getProgramInfoLog(prog));
+    glDead = true; return false;
+  }
+  gl.useProgram(prog);
+  glProg = prog;
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  glLoc = {
+    blob: gl.getUniformLocation(prog, 'uBlob'),
+    top:  gl.getUniformLocation(prog, 'uTop'),
+    bot:  gl.getUniformLocation(prog, 'uBot'),
+    bg:   gl.getUniformLocation(prog, 'uBg'),
+    ar:   gl.getUniformLocation(prog, 'uAR'),
+  };
+  const hex = h => [parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255];
+  // Din palett: sand i bakgrunnen, dyp lilla oeverst som blir lysere nedover.
+  gl.uniform3fv(glLoc.top, new Float32Array(hex(P.l3)));
+  gl.uniform3fv(glLoc.bot, new Float32Array(hex(P.l2)));
+  gl.uniform3fv(glLoc.bg,  new Float32Array(hex(P.sky)));
+  return true;
+}
+
+function drawLavaGL(dt) {
+  if (!lavaGLInit()) return;
+  moveBlobs(dt);
+
+  if (glCv.width !== W || glCv.height !== H) {
+    glCv.width = W; glCv.height = H;
+    gl.viewport(0, 0, W, H);
+  }
+
+  for (let i = 0; i < NBLOB; i++) {
+    const b = BLOBS[i];
+    GLB[i*3] = b.x; GLB[i*3+1] = b.y; GLB[i*3+2] = b.rNow;
+  }
+  gl.uniform3fv(glLoc.blob, GLB);
+  gl.uniform1f(glLoc.ar, H / W);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// ===========================================================================
+//  Soyler — hele bredden, med baller som blir slaatt opp
+// ===========================================================================
+// Ti baand gir ti soyler, og ti soyler fyller ikke en skjerm. Vi interpolerer
+// mellom baandene i stedet: fire ganger saa mange soyler, samme maaledata.
+// Det er aerlig — kurven mellom to baand er en glatt overgang, ikke oppdiktet
+// opplosning — og det ser ut som et ekte spekter.
+const COL_MIN = 28, COL_MAX = 64;
+let COLS = 40;
+let CH = new Float32Array(COLS);        // hoyde per soyle
+let CTOP = new Float32Array(COLS);      // toppen forrige bilde, til kollisjon
+
+const FLOOR = 0.985;
+const G_BALL = 2.2;                     // skjermhoyder per sekund^2
+const BALLS = [
+  { x: 0.16, vx:  0.055, y: 0.35, vy: 0, r: 0.040 },
+  { x: 0.39, vx: -0.045, y: 0.30, vy: 0, r: 0.030 },
+  { x: 0.62, vx:  0.035, y: 0.38, vy: 0, r: 0.048 },
+  { x: 0.85, vx: -0.060, y: 0.32, vy: 0, r: 0.026 },
+];
+
+// Hoyden soylene hviler paa naar ingenting spilles, som andel av skjermen.
+// Sida skal ikke vaere tom naar du kommer inn, men naar musikken forst gaar
+// skal den faa hele omraadet — ogsaa helt ned.
+const IDLE_H = 0.40;
+let live = 0;
+
+function colsFor(w) {
+  return Math.max(COL_MIN, Math.min(COL_MAX, Math.round(w / DPR / 26)));
+}
+
+/** Flytter ett objekt ett bilde.
+ *  rFrac  = radius i hoydeenheter (til kollisjon)
+ *  rxFrac = radius i breddeenheter (til aa finne hvilke soyler den daekker) */
+/** Hoyden en soyle faktisk tegnes med, hvile og musikk blandet. */
+function colFrac(c, span) {
+  const idle = IDLE_H * (0.82 + 0.18 * Math.sin(c * 0.42 + S.phase * 0.5));
+  return Math.max(0.010, idle + (span * CH[c] - idle) * live);
+}
+
+function stepBall(o, s, span, cols, rFrac, rxFrac) {
+  o.vy += G_BALL * s;
+  o.y  += o.vy * s;
+  o.x  += o.vx * s;
+  if (o.x < rxFrac)     { o.x = rxFrac;     o.vx =  Math.abs(o.vx); }
+  if (o.x > 1 - rxFrac) { o.x = 1 - rxFrac; o.vx = -Math.abs(o.vx); }
+
+  // En ball er bredere enn en soyle, saa den hviler paa flere samtidig. To
+  // forsok bommet foer dette:
+  //
+  //   Bare soyla under midten: ballen sank ned i en hoyere nabo.
+  //   Hoyeste soyle innenfor bredden, loftet med hele radien: da sto ballen
+  //   paa luft saa snart en hoy soyle bare saa vidt rorte kanten av den.
+  //
+  // Riktig svar foelger av formen. En sirkel som rorer en soyle et stykke
+  // ute fra midten, ligger LAVERE enn en som rorer den rett under: klaringa
+  // er r*sqrt(1 - u^2), der u er hvor langt ut paa ballen soyla treffer.
+  // Vi regner ut hva hver soyle krever, og tar den strengeste.
+  const c0 = Math.max(0, Math.floor((o.x - rxFrac) * COLS));
+  const c1 = Math.min(COLS - 1, Math.floor((o.x + rxFrac) * COLS));
+  let yRest = Infinity, c = -1;
+  for (let k = c0; k <= c1; k++) {
+    const u = ((k + 0.5) / COLS - o.x) / rxFrac;
+    if (u <= -1 || u >= 1) continue;
+    const clear = rFrac * Math.sqrt(1 - u * u);
+    const req = FLOOR - colFrac(k, span) - clear;
+    if (req < yRest) { yRest = req; c = k; }
+  }
+
+  if (c >= 0 && o.y > yRest) {
+    const impact = Math.abs(o.vy);
+    o.y = yRest;
+    // Hvor fort steg soyla som baerer ballen, siden forrige bilde?
+    const rise = (CTOP[c] - (FLOOR - colFrac(c, span))) / s;
+    const kick = Math.min(1.6, Math.max(0, rise) * 0.85);
+    // Tre tilfeller, ikke ett. Foer fikk en ball i ro et lite spark hver
+    // eneste ramme av at hvilebolgen steg saa vidt under den.
+    if (kick > 0.25)        o.vy = -kick;                 // et ekte slag
+    else if (impact > 0.25) o.vy = -impact * 0.28;        // sprett etter fall
+    else                    o.vy = 0;                     // hviler
+  }
+  if (o.y < 0.04) { o.y = 0.04; o.vy = Math.abs(o.vy) * 0.4; }
+}
+
+function drawBars(dt) {
+  const s = Math.min(dt, 50) / 1000;
+  g.fillStyle = P.sky; g.fillRect(0, 0, W, H);
+
+  const want = colsFor(W);
+  if (want !== COLS) { COLS = want; CH = new Float32Array(COLS); CTOP = new Float32Array(COLS).fill(FLOOR); }
+
+  const ceil = TOP_LIMIT + 0.04, span = FLOOR - ceil;
+
+  // --- baandnivaaer, glattet ---------------------------------------------
+  for (let n = 0; n < NBV; n++) {
+    const v = Math.min(1, bandRel(n) * GAIN * 1.5);
+    BY[n] += (v - BY[n]) * (1 - Math.exp(-dt / 55));
+  }
+
+  // Hvor mye lyd er det egentlig? Naar det er stille glir soylene tilbake til
+  // hvilehoyden; naar musikken gaar overtar den helt. Overgangen tar drovt et
+  // sekund hver vei, saa den ikke rykker i pauser mellom to laater.
+  let sum = 0;
+  for (let n = 0; n < NBV; n++) sum += BV[n];
+  live += ((sum > 0.0025 ? 1 : 0) - live) * (1 - Math.exp(-dt / 900));
+
+  // --- soyler over hele bredden ------------------------------------------
+  const slot = W / COLS, bw = slot * 0.72, rad = Math.min(bw * 0.5, H * 0.014);
+  for (let c = 0; c < COLS; c++) {
+    const f = c / (COLS - 1) * (NBV - 1);
+    const i0 = Math.floor(f), i1 = Math.min(NBV - 1, i0 + 1), u = f - i0;
+    CH[c] = BY[i0] + (BY[i1] - BY[i0]) * u;
+
+    // Hvilehoyden har en slak bolge, ellers ser rekka ut som en murkant.
+    const idle = IDLE_H * (0.82 + 0.18 * Math.sin(c * 0.42 + S.phase * 0.5));
+    const frac = idle + (span * CH[c] - idle) * live;
+    const h = Math.max(H * 0.010, H * frac);
+    const x = c * slot + (slot - bw) / 2;
+    g.fillStyle = c < COLS * 0.3 ? P.l3 : c < COLS * 0.6 ? P.l2 : P.l1;
+    g.beginPath(); g.roundRect(x, H * FLOOR - h, bw, h, [rad, rad, 0, 0]); g.fill();
+  }
+
+  // --- ballene ------------------------------------------------------------
+  // Soyla loefter ballen ved aa flytte seg oppover under den. Vi maaler hvor
+  // fort toppen steg siden forrige bilde og gir ballen den farten — da blir
+  // slaget en foelge av musikken, ikke en animasjon vi spiller av.
+  const minWH = Math.min(W, H);
+  for (const b of BALLS) {
+    stepBall(b, s, span, CH, b.r * (minWH / H), b.r * (minWH / W));
+    const px = W * b.x, py = H * b.y;
+    const r = Math.min(W, H) * b.r;
+    g.fillStyle = ACCENT;
+    g.beginPath(); g.arc(px, py, r, 0, Math.PI * 2); g.fill();
+  }
+  for (let c = 0; c < COLS; c++) CTOP[c] = FLOOR - colFrac(c, span);
+}
+
+// ===========================================================================
+//  Diskokule — ett speil, mange lys
+// ===========================================================================
+// Kula er ekte geometri, ikke et bilde. Fasettene ligger paa en kule og
+// roteres om y-aksen; vi tegner bare de drovt halvparten som vender mot oss.
+// Rotasjon om y treffer bare x og z, saa hvert hjorne koster to
+// multiplikasjoner — ingen sinus per fasett, bare to per bilde totalt.
+//
+// Fargen ligger i LYSET, ikke i speilet. To lyskastere, en varm fra venstre
+// og en kald fra hoyre, driver sakte i nyanse slik som i Rave. Styrken
+// kvantiseres til 24 trinn og slaas opp i to tabeller, saa vi slipper aa
+// bygge halvannet hundre fargestrenger i hvert bilde.
+const D_RAD = Math.PI / 180;
+let dNx = null, dNy = null, dNz = null, dQx = null, dQy = null, dQz = null, D_N = 0;
+let dBias = null;
+
+function discoBuild() {
+  const step = 12, gap = 0.46;          // 8 % luft mellom speilene = fugene
+  const nx = [], ny = [], nz = [], qx = [], qy = [], qz = [];
+  for (let lat = -84; lat <= 84.1; lat += step) {
+    const a = lat * D_RAD, cl = Math.cos(a);
+    const n = Math.max(4, Math.round(30 * cl));
+    const a0 = (lat - step * gap) * D_RAD, a1 = (lat + step * gap) * D_RAD;
+    for (let i = 0; i < n; i++) {
+      const om = (i + 0.5) / n * Math.PI * 2;
+      nx.push(cl * Math.sin(om)); ny.push(-Math.sin(a)); nz.push(cl * Math.cos(om));
+      const o0 = (i + 0.5 - gap) / n * Math.PI * 2;
+      const o1 = (i + 0.5 + gap) / n * Math.PI * 2;
+      const pts = [[a0, o0], [a0, o1], [a1, o1], [a1, o0]];
+      for (const [la, lo] of pts) {
+        const c = Math.cos(la);
+        qx.push(c * Math.sin(lo)); qy.push(-Math.sin(la)); qz.push(c * Math.cos(lo));
+      }
+    }
+  }
+  D_N = nx.length;
+  dNx = Float32Array.from(nx); dNy = Float32Array.from(ny); dNz = Float32Array.from(nz);
+  dQx = Float32Array.from(qx); dQy = Float32Array.from(qy); dQz = Float32Array.from(qz);
+  // Uten dette moter det varme og det kalde lyset hverandre i en knivskarp
+  // strek midt paa kula, og den leser som en badeball. Et lite tilfeldig
+  // fortrinn per speil gjor grensa flisete — som ekte speil som fanger hver
+  // sin lyskaster.
+  dBias = Float32Array.from({ length: D_N }, (_, i) => (_hash(i, 21) - 0.5) * 0.26);
+}
+discoBuild();
+
+// Lysflekkene paa veggen ligger i polarkoordinater om samme senter som kula,
+// saa naar kula snurrer, vandrer flekkene med den.
+const D_SPOTS = Array.from({ length: 64 }, (_, i) => ({
+  a:  _hash(i, 11) * Math.PI * 2,
+  r:  0.26 + _hash(i, 12) * 0.74,
+  sz: 0.006 + _hash(i, 13) * 0.013,
+  w:  _hash(i, 14) < 0.5,
+  ph: _hash(i, 15) * 6.283,
+}));
+
+// To lys, og halvveisvektoren mot betrakteren for glansen. Regnet ut en gang.
+const LAX = -0.553, LAY = -0.503, LAZ = 0.664;
+const HAX = -0.303, HAY = -0.276, HAZ = 0.912;
+const LBX =  0.600, LBY = -0.420, LBZ = 0.680;
+const HBX =  0.327, HBY = -0.229, HBZ = 0.917;
+
+let dRot = 0, dHue = 32, dPulse = 0, dFlash = 0, dLastFlash = 0;
+let dPrevKick = 0, dPrevAir = 0;
+let dBg = null, dBgH = 0;
+let dCyS = 0, dRS = 0;
+const D_TAB_A = new Array(24), D_TAB_B = new Array(24);
+
+function discoTables() {
+  const hA = dHue % 360, hB = (dHue + 186) % 360;
+  for (let i = 0; i < 24; i++) {
+    const u = i / 23;
+    // Metningen faller mot toppen: et speil som treffes rett paa blir hvitt,
+    // det er halvskyggen som beholder fargen fra lyskasteren.
+    const sat = (78 - u * 64).toFixed(0);
+    const lig = (6 + u * u * 76 + u * 13).toFixed(0);
+    D_TAB_A[i] = `hsl(${hA.toFixed(0)} ${sat}% ${lig}%)`;
+    D_TAB_B[i] = `hsl(${hB.toFixed(0)} ${sat}% ${lig}%)`;
+  }
+}
+
+function drawDisco(dt) {
+  const s = Math.min(dt, 50) / 1000;
+  const now = performance.now();
+
+  const bass = bandRel(0) * 0.6 + bandRel(1) * 0.4;
+  const mid  = bandRel(4) * 0.5 + bandRel(5) * 0.5;
+  const air  = bandRel(8) * 0.5 + bandRel(9) * 0.5;
+
+  // Samme kantdeteksjon som Rave: et slag er en OPPGANG, ikke et hoyt tall.
+  const kickHit = rose(S.hitKick, dPrevKick, 0.33); dPrevKick = S.hitKick;
+  const airHit  = rose(S.hitAir,  dPrevAir,  0.50); dPrevAir  = S.hitAir;
+  if (kickHit) dPulse = Math.min(1.15, dPulse + kickHit * 0.8);
+  dPulse *= Math.pow(0.010, s);
+  // Samme sperre paa 300 ms som strobet i Rave — godt under omraadet som
+  // utloser anfall, og hvert glimt lander paa et slag i stedet for aa suse.
+  if ((kickHit || airHit) && now - dLastFlash > 300) {
+    dFlash = kickHit ? 1 : 0.45; dLastFlash = now;
+  }
+  dFlash *= Math.pow(0.004, s);
+
+  dHue += s * 5 * (0.4 + mid);
+  dRot += s * (0.32 + mid * 0.8 + dPulse * 0.45) * GAIN;
+
+  if (!dBg || dBgH !== H) {
+    dBg = g.createLinearGradient(0, 0, 0, H);
+    dBg.addColorStop(0, '#0d0a17'); dBg.addColorStop(1, '#05040a');
+    dBgH = H;
+  }
+  g.fillStyle = dBg; g.fillRect(0, 0, W, H);
+
+  // Kula henger fra taket, rett under tittelsona — samme strek som flatene i
+  // Aurora holder seg under. Naar knappene trekker seg unna faar den mer
+  // plass, og den glir dit paa et par tidels sekund i stedet for aa hoppe.
+  const minWH = Math.min(W, H);
+  const tR  = minWH * (TOP_LIMIT < 0.16 ? 0.19 : 0.155);
+  const tCy = H * (TOP_LIMIT + 0.03) + tR;
+  if (!dRS) { dRS = tR; dCyS = tCy; }
+  const kf = 1 - Math.exp(-dt / 220);
+  dRS += (tR - dRS) * kf; dCyS += (tCy - dCyS) * kf;
+
+  const cx = W / 2, cy = dCyS;
+  // Kula puster med slaget. Sju prosent er nok til aa merkes uten at den
+  // begynner aa sprette — den henger i en snor, den hopper ikke.
+  const R = dRS * (1 + dPulse * 0.07 + bass * 0.05);
+  const maxR = Math.hypot(W, H) * 0.62;
+  const hueA = dHue % 360, hueB = (dHue + 186) % 360;
+
+  g.globalCompositeOperation = 'lighter';
+
+  // --- straaler ut i rommet ------------------------------------------------
+  const beamA = (0.045 + bass * 0.20 + dPulse * 0.15).toFixed(3);
+  const bg = g.createRadialGradient(cx, cy, R * 0.85, cx, cy, maxR);
+  bg.addColorStop(0, `hsla(${hueA} 100% 66% / ${beamA})`);
+  bg.addColorStop(1, `hsla(${hueB} 100% 60% / 0)`);
+  g.fillStyle = bg;
+  const half = 0.05 + air * 0.045;
+  for (let i = 0; i < 7; i++) {
+    const a = dRot * 0.55 + i / 7 * Math.PI * 2;
+    g.beginPath(); g.moveTo(cx, cy);
+    g.lineTo(cx + Math.cos(a - half) * maxR, cy + Math.sin(a - half) * maxR);
+    g.lineTo(cx + Math.cos(a + half) * maxR, cy + Math.sin(a + half) * maxR);
+    g.closePath(); g.fill();
+  }
+
+  // --- lysflekker paa veggen ----------------------------------------------
+  // To firkanter per flekk, en liten og skarp og en stor og svak. Det leser
+  // som uskarphet, og koster to fillRect i stedet for et filter.
+  const flare = 0.5 + dPulse * 0.75 + bass * 0.45;
+  for (const p of D_SPOTS) {
+    const a = p.a + dRot;
+    const rr = p.r * maxR * 0.9;
+    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr * 0.72;
+    const tw = 0.55 + 0.45 * Math.sin(S.phase * 7 + p.ph);
+    const sz = minWH * p.sz * (0.7 + dPulse * 0.55);
+    const al = Math.min(0.85, 0.30 * tw * flare);
+    g.fillStyle = `hsla(${p.w ? hueA : hueB} 92% 72% / ${al.toFixed(3)})`;
+    g.fillRect(x - sz * 0.5, y - sz * 0.5, sz, sz);
+    g.globalAlpha = 0.30;
+    g.fillRect(x - sz * 1.3, y - sz * 1.3, sz * 2.6, sz * 2.6);
+    g.globalAlpha = 1;
+  }
+
+  // --- glorie rundt kula ---------------------------------------------------
+  const hg = g.createRadialGradient(cx, cy, R * 0.7, cx, cy, R * 2.6);
+  hg.addColorStop(0, `hsla(${hueA} 100% 70% / ${(0.14 + bass * 0.22).toFixed(3)})`);
+  hg.addColorStop(1, 'hsla(0 0% 0% / 0)');
+  g.fillStyle = hg;
+  g.beginPath(); g.arc(cx, cy, R * 2.6, 0, 6.2832); g.fill();
+
+  g.globalCompositeOperation = 'source-over';
+
+  // --- snora ---------------------------------------------------------------
+  g.strokeStyle = 'rgba(232,226,246,.26)';
+  g.lineWidth = Math.max(1, minWH * 0.003);
+  g.beginPath(); g.moveTo(cx, 0); g.lineTo(cx, cy - R * 0.99); g.stroke();
+
+  // Kroppen under speilene. Uten den slipper fugene mot silhuetten
+  // bakgrunnen igjennom, og kanten flimrer.
+  g.fillStyle = '#0b0912';
+  g.beginPath(); g.arc(cx, cy, R * 1.01, 0, 6.2832); g.fill();
+
+  // --- speilene ------------------------------------------------------------
+  discoTables();
+  const ca = Math.cos(dRot), sa = Math.sin(dRot);
+  const gl = 1.2 + dPulse * 0.8 + air * 0.6;
+  for (let i = 0; i < D_N; i++) {
+    const ax = dNx[i], ay = dNy[i], az = dNz[i];
+    const nz = az * ca - ax * sa;
+    if (nz <= 0.02) continue;                 // vender bort fra oss
+    const nx = ax * ca + az * sa, ny = ay;
+
+    const dA = nx * LAX + ny * LAY + nz * LAZ;
+    const dB = nx * LBX + ny * LBY + nz * LBZ;
+    const warm = dA + dBias[i] >= dB;
+    const sp = warm ? nx * HAX + ny * HAY + nz * HAZ
+                    : nx * HBX + ny * HBY + nz * HBZ;
+    let v = 0.09 + Math.max(0, warm ? dA : dB) * 0.40 + nz * 0.10;
+    // Glansen er dot^14, regnet med kvadrering i stedet for Math.pow.
+    if (sp > 0) { const p2 = sp * sp, p4 = p2 * p2; v += p4 * p4 * p4 * p2 * gl; }
+    const k = v <= 0 ? 0 : v >= 1 ? 23 : (v * 23) | 0;
+    g.fillStyle = warm ? D_TAB_A[k] : D_TAB_B[k];
+
+    const o = i * 4;
+    g.beginPath();
+    for (let c = 0; c < 4; c++) {
+      const X = cx + (dQx[o + c] * ca + dQz[o + c] * sa) * R;
+      const Y = cy + dQy[o + c] * R;
+      c === 0 ? g.moveTo(X, Y) : g.lineTo(X, Y);
+    }
+    g.closePath(); g.fill();
+  }
+
+  // Fast lyssetting oppa den roterende kula: lyspunkt oppe til venstre, mork
+  // kant rundt. Det er dette som gjor at flaten leser som en KULE og ikke som
+  // et rutenett klippet til en sirkel.
+  const vg = g.createRadialGradient(cx - R * 0.34, cy - R * 0.38, R * 0.04, cx, cy, R * 1.02);
+  vg.addColorStop(0, 'rgba(255,255,255,.12)');
+  vg.addColorStop(0.62, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(5,4,10,.55)');
+  g.fillStyle = vg;
+  g.beginPath(); g.arc(cx, cy, R * 1.02, 0, 6.2832); g.fill();
+
+  if (dFlash > 0.02) {
+    g.fillStyle = `hsla(${hueB} 100% 66% / ${(dFlash * 0.15).toFixed(3)})`;
+    g.fillRect(0, 0, W, H);
+  }
+}
+
+// ===========================================================================
+//  Demolyd, slik at flatene faktisk beveger seg mens du ser paa layouten
+// ===========================================================================
+const BLOCK_MS = 20;
+let feat = null, actx = null, src = null, t0 = 0;
+
+// Elleve delefrekvenser gir ti baand, logaritmisk fordelt slik oret hoerer.
+// Hvert baand er differansen mellom to topassfiltre — to poler hver, som er
+// bratt nok til at nabobaandene ikke smitter synlig over paa hverandre.
+
+function extract(buf, sr) {
+  const block = Math.max(64, Math.round(sr * BLOCK_MS / 1000));
+  const count = Math.floor(buf.length / block);
+  const F = () => new Float32Array(count);
+  const out = { block, sr, kick:F(), mid:F(), air:F(), hitKick:F(), hitMid:F(), hitAir:F(),
+                sub1:F(), sub2:F(),
+                bands: Array.from({length: NB}, F) };
+  const c = f => 1 - Math.exp(-2 * Math.PI * f / sr);
+  // To smale baand rundt 25 og 65 Hz — bare selve slaget, ingen bassgang,
+  // ingen stemmer, ingenting som kan forveksles med noe annet.
+  const sA_ = [c(18), c(35), c(50), c(85)];
+  const sp1 = new Float64Array(4), sp2 = new Float64Array(4);
+  const a20=c(20), a100=c(100), a250=c(250), a900=c(900), a8k=c(8000);
+  let r=0,k1=0,k2=0,k3=0,k4=0,lo1=0,lo2=0,hi1=0,hi2=0,t1=0,t2=0;
+
+  const ae = EDGES.map(c);
+  const p1 = new Float64Array(EDGES.length), p2 = new Float64Array(EDGES.length);
+  const acc = new Float64Array(NB);
+
+  for (let b = 0; b < count; b++) {
+    let sK=0,sM=0,sA=0,s1=0,s2=0; const st = b*block;
+    acc.fill(0);
+    for (let i = 0; i < block; i++) {
+      const x = buf[st+i];
+      r += a20*(x-r);
+      k1+=a100*(x-k1); k2+=a100*(k1-k2); k3+=a100*(k2-k3); k4+=a100*(k3-k4);
+      const kick = k4-r;
+      lo1+=a250*(x-lo1); lo2+=a250*(lo1-lo2);
+      hi1+=a900*(x-hi1); hi2+=a900*(hi1-hi2);
+      const mid = hi2-lo2;
+      t1+=a8k*(x-t1); t2+=a8k*(t1-t2);
+      const air = x-t2;
+      sK+=kick*kick; sM+=mid*mid; sA+=air*air;
+
+      for (let e = 0; e < 4; e++) { sp1[e]+=sA_[e]*(x-sp1[e]); sp2[e]+=sA_[e]*(sp1[e]-sp2[e]); }
+      const v1 = sp2[1]-sp2[0], v2 = sp2[3]-sp2[2];
+      s1 += v1*v1; s2 += v2*v2;
+
+      for (let e = 0; e < EDGES.length; e++) {
+        p1[e] += ae[e]*(x - p1[e]);
+        p2[e] += ae[e]*(p1[e] - p2[e]);
+      }
+      for (let n = 0; n < NB; n++) {
+        const v = p2[n+1] - p2[n];
+        acc[n] += v*v;
+      }
+    }
+    out.kick[b]=Math.sqrt(sK/block); out.mid[b]=Math.sqrt(sM/block); out.air[b]=Math.sqrt(sA/block);
+    out.sub1[b]=Math.sqrt(s1/block); out.sub2[b]=Math.sqrt(s2/block);
+    for (let n = 0; n < NB; n++) out.bands[n][b] = Math.sqrt(acc[n]/block);
+  }
+  const env = (s0, d, up, dn, thr, gate) => {
+    let fast=0, floor=0, peak=0;
+    for (let b = 0; b < count; b++) {
+      const v = s0[b];
+      fast += (v>fast?up:dn)*(v-fast);
+      floor += (v>floor?0.006:0.050)*(v-floor);
+      if (fast>peak) peak=fast; else peak += 0.0015*(fast-peak);
+      const rl = Math.max(0,(fast-floor*thr)/(floor+1e-4));
+      d[b] = rl * Math.min(1, fast/(peak*gate+1e-5));
+    }
+  };
+  env(out.kick, out.hitKick, 0.85,0.30,1.15,0.55);
+  env(out.mid,  out.hitMid,  0.88,0.32,1.20,0.35);
+  env(out.air,  out.hitAir,  0.95,0.40,1.20,0.25);
+  return out;
+}
+
+/** Felles vei inn for demolyd og ekte fil: analyser, og spill. */
+function playBuffer(buf, loop) {
+  if (src) { try { src.stop(); } catch {} }
+  // Analysen bruker venstre kanal. I produksjon summeres kanalene, men her er
+  // poenget aa se bevegelsen, og en miks er sjelden saa ulik mellom sidene at
+  // det endrer hvilke baand som slaar ut.
+  feat = extract(buf.getChannelData(0), buf.sampleRate);
+  src = actx.createBufferSource();
+  src.buffer = buf; src.loop = !!loop;
+  const gain = actx.createGain(); gain.gain.value = 0.5;
+  src.connect(gain).connect(actx.destination);
+  src.start(); t0 = actx.currentTime;
+}
+
+async function loadFile(f) {
+  if (!f) return;
+  actx = actx || new AudioContext();
+  await actx.resume();
+  const el = document.getElementById('nowFile');
+  el.textContent = 'reading ' + f.name + ' …';
+  try {
+    const buf = await actx.decodeAudioData(await f.arrayBuffer());
+    playBuffer(buf, true);
+    el.textContent = f.name;
+  } catch (e) {
+    el.textContent = 'could not read that file';
+  }
+}
+
+async function startDemo() {
+  actx = actx || new AudioContext();
+  await actx.resume();
+  if (src) { try { src.stop(); } catch {} }
+  const sr = actx.sampleRate, dur = 8;
+  const buf = actx.createBuffer(1, sr*dur, sr);
+  const d = buf.getChannelData(0);
+  const chords = [[110,138.6,164.8],[98,123.5,146.8],[87.3,110,130.8],[98,123.5,164.8]];
+  for (let i = 0; i < d.length; i++) {
+    const t = i/sr, ch = chords[Math.floor(t/2)%4];
+    let v = 0; for (const f of ch) v += Math.sin(2*Math.PI*f*t)*0.10;
+    const beat = t % 0.5;
+    v += Math.sin(2*Math.PI*52*beat)*Math.exp(-beat*20)*0.45;
+    const hat = t % 0.25;
+    v += (Math.random()*2-1)*Math.exp(-hat*120)*0.06;
+    d[i] = v*0.7;
+  }
+  playBuffer(buf, true);
+  document.getElementById('nowFile').textContent = 'demo tone';
+}
+
+// ===========================================================================
+//  Sloyfe
+// ===========================================================================
+let last = 0, frameMs = 0, fpsAvg = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+  const iv = 1000/FPS;
+  if (ts - last < iv - 1) return;
+  const dt = last ? ts - last : iv; last = ts;
+  const t = performance.now();
+
+  if (feat && actx && src) {
+    const idx = Math.floor((actx.currentTime - t0) * feat.sr / feat.block) % feat.kick.length;
+    const k = SMOOTH;
+    S.kick += (1-k)*(feat.kick[idx]-S.kick);
+    S.mid  += (1-k)*(feat.mid[idx] -S.mid);
+    S.air  += (1-k)*(feat.air[idx] -S.air);
+    const dk = Math.pow(0.86, dt/16.7);
+    S.hitKick = Math.max(S.hitKick*dk, feat.hitKick[idx]);
+    S.hitMid  = Math.max(S.hitMid *dk, feat.hitMid[idx]);
+    S.hitAir  = Math.max(S.hitAir *dk, feat.hitAir[idx]);
+    for (let n = 0; n < NBV; n++) BV[n] += (1-k) * (feat.bands[n][idx] - BV[n]);
+    S.sub += (1-k) * ((feat.sub1[idx] * 0.35 + feat.sub2[idx] * 0.65) - S.sub);
+  }
+  S.phase += dt * 0.0006;
+  updateBands(dt);
+  if      (MODE === 'lava')    drawLava(dt);
+  else if (MODE === 'lavagl')  drawLavaGL(dt);
+  else if (MODE === 'rave')    drawRave(dt);
+  else if (MODE === 'disco')   drawDisco(dt);
+  else if (MODE === 'bars')    drawBars(dt);
+  else                         draw(dt);
+
+  frameMs = frameMs*0.9 + (performance.now()-t)*0.1;
+  fpsAvg  = fpsAvg *0.9 + (1000/Math.max(dt,1))*0.1;
+  if ((ts|0) % 8 === 0) {
+    $('d_fps').textContent = fpsAvg.toFixed(0) + ' · ' + frameMs.toFixed(1);
+    $('d_bass').textContent = S.sub.toFixed(3) + ' → '
+      + Math.min(1.4, S.sub / LAVA_REF).toFixed(2) + '  kule ' + BLOBS[0].sp.toFixed(2);
+  }
+}
+requestAnimationFrame(loop);
+
+// ===========================================================================
+//  Tilstand og knapper
+// ===========================================================================
+const $ = id => document.getElementById(id);
+let joined = false, sharing = false, connected = false;
+// To uavhengige ting: knappene, og timing-kortet. Naar man trykker Join
+// trekker knappene seg unna og kortet kommer fram — det er det eneste man
+// trenger aa forholde seg til i det oyeblikket. «Everything OK» legger kortet
+// bort, og Edit henter alt tilbake.
+let showControls = true;    // Join / Share
+let showTiming   = false;   // «er lyden i takt?»-boksen
+
+function paint() {
+  $('joinLabel').textContent = joined ? 'Stop' : 'Join';
+  $('joinSub').textContent   = joined ? "you're in sync" : "hear what's playing";
+  $('shareBtn').innerHTML    = sharing ? '<span>Stop<br>sharing</span>'
+                                       : '<span>Share<br>to others</span>';
+
+  const dot = $('dot'), txt = $('stateTxt');
+  dot.className = 'dot';
+  if (!connected)   { txt.textContent = 'Not connected'; }
+  else if (sharing) { dot.classList.add('live'); txt.textContent = 'Sharing · 3 devices listening'; }
+  else if (joined)  { dot.classList.add('live'); txt.textContent = 'Playing · 3 devices in sync'; }
+  else              { dot.classList.add('warn'); txt.textContent = 'Connected · nobody streaming yet'; }
+
+  const playing = joined || sharing;
+  $('nowLabel').textContent = sharing ? 'Streaming' : 'Playing';
+  document.body.classList.toggle('playing', playing);
+  document.body.classList.toggle('hidden', playing && !showControls);
+  document.body.classList.toggle('asking', showTiming);
+  document.body.classList.toggle('open', showControls || showTiming);
+  setTopLimit(playing && !showControls);
+  $('editBtn').textContent = (showControls || showTiming) ? 'Done' : 'Edit';
+}
+
+$('joinBtn').onclick = async () => {
+  joined = !joined;
+  if (joined) {
+    connected = true; if (!feat) await startDemo();
+    showControls = false; showTiming = true;      // kortet tar over
+  } else {
+    if (src) { try { src.stop(); } catch {} src = null; feat = null; }
+    showControls = true; showTiming = false;
+  }
+  paint();
+};
+// Chrome er ikke en anbefaling her, det er et krav: bare Chromium-baserte
+// nettlesere kan ta med lyden fra en fane i getDisplayMedia. Safari og
+// Firefox gir deg bildet og stillhet, uten aa si fra.
+function isChromium() {
+  const b = navigator.userAgentData?.brands;
+  if (b) return b.some(x => /Chromium/i.test(x.brand));
+  return /Chrome\//.test(navigator.userAgent) && !/OPR\/|Edg\//.test(navigator.userAgent);
+}
+
+$('shareBtn').onclick = () => {
+  if (sharing) { sharing = false; showControls = true; paint(); return; }
+  const w = $('shareWarn');
+  if (isChromium()) { w.hidden = true; }
+  else {
+    w.hidden = false;
+    w.textContent = 'This browser cannot capture tab audio. Open the page in '
+      + 'Chrome to share — joining works fine here.';
+  }
+  document.body.classList.add('sharing-help');
+};
+$('shareCancel').onclick = () => document.body.classList.remove('sharing-help');
+$('shareGo').onclick = async () => {
+  document.body.classList.remove('sharing-help');
+  sharing = true; connected = true; joined = true;
+  if (!feat) await startDemo();
+  showControls = false; showTiming = true;
+  paint();
+};
+// --- dra inn en fil, eller velg en ------------------------------------------
+const dropEl = document.getElementById('drop');
+addEventListener('dragover',  e => { e.preventDefault(); dropEl.classList.add('on'); });
+addEventListener('dragleave', () => dropEl.classList.remove('on'));
+addEventListener('drop', async e => {
+  e.preventDefault(); dropEl.classList.remove('on');
+  await loadFile(e.dataTransfer.files[0]);
+  if (!joined) { joined = true; connected = true; showControls = false; showTiming = true; paint(); }
+});
+$('pickBtn').onclick = () => $('file').click();
+$('file').onchange = async e => {
+  await loadFile(e.target.files[0]);
+  if (!joined) { joined = true; connected = true; showControls = false; showTiming = true; paint(); }
+};
+$('demoBtn').onclick = () => { feat = null; startDemo(); };
+
+// Ja: ferdig. Nei: bytt boksens innhold til finjusteringa — samme boks paa
+// samme plass, saa det ikke foles som et nytt vindu.
+$('syncYes').onclick = () => { showTiming = false; showControls = false; paint(); };
+$('syncNo').onclick  = () => { $('syncAsk').hidden = true; $('syncTune').hidden = false; };
+$('okBtn').onclick   = () => {
+  showTiming = false; showControls = false;
+  $('syncAsk').hidden = false; $('syncTune').hidden = true;   // neste gang: sporsmaalet forst
+  paint();
+};
+$('editBtn').onclick = () => {
+  const open = showControls || showTiming;
+  showControls = !open; showTiming = !open;
+  paint();
+};
+$('fine').oninput  = e => { $('fineVal').textContent = e.target.value; };
+$('d_buf').oninput = e => { $('d_bufval').textContent = e.target.value; };
+
+document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
+  MODE = b.dataset.mode;
+  BY.fill(0); BPK.fill(0);
+  applyMode();
+  document.querySelectorAll('[data-mode]').forEach(o => o.classList.toggle('on', o === b));
+});
+function applyMode() {
+  FPS = FPS_FOR[MODE] || 30;
+  document.body.classList.toggle('rave', MODE === 'rave');
+  document.body.classList.toggle('disco', MODE === 'disco');
+  document.body.classList.toggle('m-lava', MODE === 'lava');
+  document.body.classList.toggle('m-lavagl', MODE === 'lavagl');
+  document.body.classList.toggle('m-bars', MODE === 'bars');
+  if (MODE === 'lava') lavaSetup();
+  // Ingen WebGL — fall tilbake til JS-lavaen i stedet for svart skjerm.
+  if (MODE === 'lavagl' && !lavaGLInit()) {
+    console.warn('WebGL utilgjengelig — bruker JS-lavaen.');
+    MODE = 'lava';
+    document.body.classList.remove('m-lavagl');
+    document.body.classList.add('m-lava');
+    lavaSetup();
+  }
+}
+applyMode();
+$('d_nudge').oninput = e => { $('d_nudgeval').textContent = e.target.value; };
+
+$('devBtn').onclick   = () => $('dev').classList.add('on');
+$('devClose').onclick = () => $('dev').classList.remove('on');
+
+document.querySelectorAll('[data-demo]').forEach(b => b.onclick = () => {
+  const m = b.dataset.demo;
+  connected = m !== 'idle';
+  joined  = m === 'playing' || m === 'sharing';
+  sharing = m === 'sharing';
+  if (joined && !src) startDemo();
+  showControls = !joined; showTiming = false;
+  paint();
+});
+
+// Falske tall, bare for aa se at panelet holder pa formatet.
+const fake = {
+  d_offset:'11466.9 ms', d_unc:'0.33 ms', d_rtt:'0.7 / 1.3 ms', d_skew:'+76.7 ppm',
+  d_drift:'+0.4 ppm', d_lat:'32.0 ms', d_comp:'40.2 ms', d_src:'getOutputTimestamp',
+  d_codec:'Opus', d_rate:'48 kHz · stereo', d_kbps:'134 kbit/s', d_pkt:'8123 / 8123',
+  d_late:'2', d_resync:'1', d_err:'0 / 0 / 0', d_dr:'412 · 0.51 ms', d_peers:'3',
+};
+for (const k in fake) $(k).textContent = fake[k];
+
+paint();
+</script>
+</body>
+</html>

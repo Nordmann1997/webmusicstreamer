@@ -193,3 +193,15 @@ som faktisk slipper gjennom en skolebrannmur.
 Og siden ingenting i systemet snakker direkte enhet-til-enhet, spiller det
 ingen rolle at skolenettet isolerer klientene fra hverandre. Alle kobler til
 én kjent adresse.
+
+## Romkode
+
+Den som skal dele lyd (og styre rommet: se hvem som er koblet på, stoppe
+strømmen, fjerne enheter) trenger romkoden. Lyttere trenger ingen kode.
+
+    bash deploy/set-key.sh humle
+
+Store og små bokstaver teller ikke. En adresse som bommer ti ganger sperres i
+ti minutter. Koden skrives inn under **Share** på forsida og huskes på enheten.
+
+Trykk på statuslinja under Join-knappen for å se hvem som er her.

@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Visuell verksted</title>
+<style>
+  :root {
+    --ink: #f4ece4; --dim: #a89a8e; --line: rgba(255,255,255,.10);
+    --panel: rgba(20,14,12,.62);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; overflow: hidden; color: var(--ink); background: #14100f;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .drop {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    pointer-events: none; opacity: 0; transition: opacity .2s;
+    background: rgba(0,0,0,.55); font-size: 17px; z-index: 5;
+  }
+  .drop.on { opacity: 1; }
+
+  .panel {
+    position: fixed; left: 18px; bottom: 18px; z-index: 4;
+    background: var(--panel); backdrop-filter: blur(20px);
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px; width: 260px; box-shadow: 0 8px 30px rgba(0,0,0,.28);
+  }
+  .panel.hidden > .body { display: none; }
+  .panel h1 { font-size: 12px; letter-spacing: .10em; text-transform: uppercase;
+              color: var(--dim); margin: 0 0 12px; font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .row button {
+    flex: 1 1 0; min-width: 56px; padding: 7px 4px; font-size: 12px; border-radius: 8px; cursor: pointer;
+    background: rgba(255,255,255,.06); color: var(--ink);
+    border: 1px solid var(--line); transition: background .15s;
+  }
+  .row button:hover { background: rgba(255,255,255,.12); }
+  .row button.on { background: rgba(255,255,255,.92); color: #17120f; border-color: transparent; }
+  label { display: flex; justify-content: space-between; font-size: 12px;
+          color: var(--dim); margin: 10px 0 3px; }
+  input[type=range] { width: 100%; accent-color: #e8a87c; }
+  .meter { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+           font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; line-height: 1.7; }
+  .meter b { color: var(--ink); font-weight: 600; }
+  .warn { color: #f0a868; }
+  .legend { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .bar { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--dim);
+         margin-bottom:5px; }
+  .bar span { width:44px; flex:none; }
+  .bar u { flex:1; height:5px; border-radius:3px; background:rgba(255,255,255,.08);
+           overflow:hidden; text-decoration:none; }
+  .bar b { display:block; height:100%; width:0%; background:#e8a87c; border-radius:3px; }
+  .hint { font-size: 11px; color: var(--dim); margin-top: 10px; }
+  #toggle { position: fixed; left: 18px; bottom: 18px; z-index: 6;
+            background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+            border-radius: 10px; padding: 8px 12px; font-size: 12px; cursor: pointer;
+            backdrop-filter: blur(20px); display: none; }
+  #start {
+    position: fixed; inset: 0; z-index: 10; display: grid; place-items: center;
+    background: #14100f; cursor: pointer; text-align: center; padding: 24px;
+  }
+  #start div { max-width: 380px; }
+  #start h2 { font-weight: 500; font-size: 22px; margin: 0 0 10px; letter-spacing: -.01em; }
+  #start p { color: var(--dim); margin: 0; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div class="drop" id="drop">Slipp en lydfil her</div>
+
+<div id="start"><div>
+  <h2>Visuelt verksted</h2>
+  <p>Klikk for å starte demolyden. Eller dra inn en låt fra maskinen for å se
+     hvordan det oppfører seg med ekte musikk.</p>
+</div></div>
+
+<button id="toggle">Innstillinger</button>
+
+<div class="panel" id="panel">
+  <h1>Verksted</h1>
+  <div class="body">
+    <div class="row" id="variants">
+      <button data-v="aurora" class="on">Nordlys</button>
+      <button data-v="bounce">Sprett</button>
+      <button data-v="pulse">Puls</button>
+      <button data-v="sun">Sol</button>
+    </div>
+    <div class="row" id="palettes">
+      <button data-p="dusk" class="on">Skumring</button>
+      <button data-p="ember">Glør</button>
+      <button data-p="sage">Salvie</button>
+    </div>
+
+    <label>Styrke <span id="vGain">1.0</span></label>
+    <input type="range" id="gain" min="0.2" max="2.5" step="0.1" value="1">
+
+    <label>Ro <span id="vSmooth">0.80</span></label>
+    <input type="range" id="smooth" min="0.5" max="0.97" step="0.01" value="0.8">
+
+    <label>Bilder i sekundet <span id="vFps">30</span></label>
+    <input type="range" id="fps" min="15" max="60" step="15" value="30">
+
+    <div class="meter">
+      <div><b id="mFps">–</b> b/s · <b id="mMs">–</b> ms per bilde</div>
+      <div>piksler <b id="mPx">–</b> · dpr <b id="mDpr">–</b></div>
+      <div id="mBudget">–</div>
+    </div>
+    <div class="legend" id="legend">
+      <div class="bar"><span>20–100</span><u><b id="bKick"></b></u></div>
+      <div class="bar"><span>500 Hz</span><u><b id="bMid"></b></u></div>
+      <div class="bar"><span>8 kHz+</span><u><b id="bAir"></b></u></div>
+    </div>
+    <div class="hint" id="hint">Demolyd. Dra inn en fil for ekte musikk.</div>
+  </div>
+</div>
+
+<script>
+// ===========================================================================
+//  Visuelt verksted — frittstaaende, ingen server, ingen moduler.
+//
+//  Trekk-uttrekket under er MED VILJE identisk med det som skal inn i
+//  _schedule() i appen: per blokk paa ~20 ms regnes nivaa og tre frekvensbaand
+//  med enpolsfiltre. Ingen FFT. Det som ser bra ut her, ser likt ut der.
+// ===========================================================================
+
+const BLOCK_MS = 20;
+
+// --- Paletter: varme, ikke neon ------------------------------------------
+// bg/a/b/c/glow brukes av Baand og Kule. sky/l1/l2/l3 er de flate lagene
+// i Nordlys: himmel oeverst, saa tre ugjennomsiktige lag ned mot bunnen.
+const PALETTES = {
+  dusk:  { sky:'#f4d3ae', l1:'#e2a077', l2:'#b47a8c', l3:'#584a72', l4:'#332b46' },
+  ember: { sky:'#f6d69c', l1:'#e79a4c', l2:'#c2603a', l3:'#6f3026', l4:'#3d1a16' },
+  sage:  { sky:'#dfe8cf', l1:'#aec49a', l2:'#7a9b8b', l3:'#3f544d', l4:'#24322d' },
+};
+
+// --- Trekk-uttrekk --------------------------------------------------------
+// Tre baand, valgt av Johannes etter hva som skal styre hvert lag:
+//   kick  20-100 Hz    stortromme og bass, uten rumling under 20
+//   mid   250-900 Hz   kroppen i miksen, sentrert rundt 500
+//   air   over 8 kHz   cymbal og hi-hat — det som holder beaten
+// Ti enpolsfiltre per sample: noen faa multiplikasjoner, promiller av en
+// kjerne selv paa telefon.
+function extractFeatures(buf, sampleRate) {
+  const n = buf.length;
+  const block = Math.max(64, Math.round(sampleRate * BLOCK_MS / 1000));
+  const count = Math.floor(n / block);
+  const F = () => new Float32Array(count);
+  const out = { block, sampleRate, level:F(),
+                kick:F(), mid:F(), air:F(),
+                hitKick:F(), hitMid:F(), hitAir:F(), beat:F() };
+
+  const c = f => 1 - Math.exp(-2*Math.PI*f / sampleRate);
+  const a20 = c(20), a100 = c(100), a250 = c(250), a900 = c(900), a8k = c(8000);
+  let r=0, k1=0,k2=0,k3=0,k4=0, lo1=0,lo2=0, hi1=0,hi2=0, t1=0,t2=0;
+
+  for (let b = 0; b < count; b++) {
+    let sum=0, sK=0, sM=0, sA=0;
+    const st = b * block;
+    for (let i = 0; i < block; i++) {
+      const x = buf[st + i];
+      sum += x*x;
+      r  += a20 *(x-r);                                        // alt under 20 Hz
+      // fire poler paa kicken: bratt nok til at en skarptromme paa 200 Hz
+      // ikke slaar gjennom som stortromme
+      k1 += a100*(x-k1); k2 += a100*(k1-k2);
+      k3 += a100*(k2-k3); k4 += a100*(k3-k4);
+      const kick = k4 - r;                                     // 20-100 Hz
+      lo1 += a250*(x-lo1); lo2 += a250*(lo1-lo2);
+      hi1 += a900*(x-hi1); hi2 += a900*(hi1-hi2);
+      const mid = hi2 - lo2;                                   // 250-900 Hz
+      t1 += a8k *(x-t1);  t2 += a8k *(t1-t2);
+      const air = x - t2;                                      // over 8 kHz
+      sK += kick*kick; sM += mid*mid; sA += air*air;
+    }
+    out.level[b] = Math.sqrt(sum/block);
+    out.kick[b]  = Math.sqrt(sK/block);
+    out.mid[b]   = Math.sqrt(sM/block);
+    out.air[b]   = Math.sqrt(sA/block);
+  }
+
+  // Anslag: en rask konvolutt mot et STOYGULV, ikke mot snittet. Med et
+  // vanlig snitt drar aatte hi-hat i sekundet bunnlinjen opp og gjemmer
+  // slagene bak sin egen bakgrunn. Gulvet stiger tregt og faller raskt.
+  // Vi deler paa gulvet, saa en cymbal teller like mye som en stortromme
+  // selv om den har en brokdel av energien.
+  // ...men ren normalisering gjor ogsaa at stoy blir til slag: den brede
+  // stoyen i en skarptromme har litt energi under 100 Hz, og naar gulvet er
+  // lavt nok teller den som stortromme. Derfor skalerer vi ned alt som er
+  // smaatt maalt mot baandets EGEN topp. Da maa et slag baade stikke opp
+  // fra gulvet og ha kraft nok til aa hore hjemme i baandet.
+  const env = (src, dst, up, down, thr, GATE) => {
+    let fast = 0, floor = 0, peak = 0;
+    for (let b = 0; b < count; b++) {
+      const v = src[b];
+      fast  += (v > fast  ? up    : down) * (v - fast);
+      floor += (v > floor ? 0.006 : 0.050) * (v - floor);
+      if (fast > peak) peak = fast; else peak += 0.0015 * (fast - peak);
+      const rel = Math.max(0, (fast - floor*thr) / (floor + 1e-4));
+      dst[b] = rel * Math.min(1, fast / (peak * GATE + 1e-5));
+    }
+  };
+  env(out.kick, out.hitKick, 0.85, 0.30, 1.15, 0.55);
+  env(out.mid,  out.hitMid,  0.88, 0.32, 1.20, 0.35);
+  env(out.air,  out.hitAir,  0.95, 0.40, 1.20, 0.25);
+
+  for (let b = 0; b < count; b++) {
+    out.beat[b] = Math.min(2.5, out.hitKick[b] + out.hitAir[b] * 0.6);
+  }
+  return out;
+}
+
+// ===========================================================================
+//  Tegning
+// ===========================================================================
+const cv = document.getElementById('c');
+const g  = cv.getContext('2d', { alpha: false });
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  // Tak paa oppløsning: en telefon med dpr 3 har ni ganger sa mange piksler
+  // som du trenger. Dette er den storste enkeltbesparelsen.
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.round(innerWidth  * DPR);
+  H = Math.round(innerHeight * DPR);
+  cv.width = W; cv.height = H;
+  buildGradients();
+  document.getElementById('mPx').textContent  = (W*H/1e6).toFixed(2) + ' MP';
+  document.getElementById('mDpr').textContent = DPR.toFixed(1);
+}
+addEventListener('resize', resize);
+
+let pal = PALETTES.dusk;
+function buildGradients() { /* flate farger — ingenting aa bygge */ }
+
+// --- Utjevnede verdier, gjenbrukt (ingen allokering per bilde) ------------
+const S = { level:0, kick:0, mid:0, air:0,
+            hitKick:0, hitMid:0, hitAir:0, beat:0, pulse:0, phase:0 };
+
+function smoothTo(cur, target, k) { return cur + (1 - k) * (target - cur); }
+
+// Hvert baand maales mot sitt eget nivaa. Luft har en brokdel av kickens
+// energi; uten dette hadde det overste laget staatt stille hele laata.
+const AG = { kick: 0.02, mid: 0.01, air: 0.003 };
+function relative(key) {
+  const raw = S[key];
+  if (raw > AG[key]) AG[key] = raw;
+  else AG[key] += (raw - AG[key]) * 0.004;
+  return Math.min(1, raw / (AG[key] + 1e-4));
+}
+
+// Et slag er en KANT, ikke et nivaa. hitX faller sakte etter et treff, saa
+// «er den hoy?» ville utlost paa nytt hver ramme. Vi ser etter oppgangen.
+const prevHit = { hitKick: 0, hitMid: 0, hitAir: 0 };
+function struck(key, rise) {
+  const v = S[key], p = prevHit[key];
+  prevHit[key] = v;
+  return (v > p + rise && v > rise * 1.6) ? v : 0;
+}
+
+// ===========================================================================
+//  1. NORDLYS — rolig grunnform, men med et rykk paa slaget
+// ===========================================================================
+const AURORA = [
+  { lvl:'air',  hit:'hitAir',  col:'l1', y:0.34, lift:0.11, amp:0.055, sp:0.055,
+    w1:1.7, w2:3.9, ph:0.0, snap:0.030 },
+  { lvl:'mid',  hit:'hitMid',  col:'l2', y:0.60, lift:0.10, amp:0.048, sp:0.043,
+    w1:2.2, w2:4.6, ph:2.1, snap:0.026 },
+  { lvl:'kick', hit:'hitKick', col:'l3', y:0.84, lift:0.12, amp:0.042, sp:0.034,
+    w1:1.5, w2:3.3, ph:4.2, snap:0.038 },
+];
+const AS = [0,0,0], AJ = [0,0,0];        // rolig nivaa / hurtig rykk
+
+function drawAurora(t, dt) {
+  // Ro-skyveren styrer tidskonstanten direkte: 0,3 s naar den staar lavt,
+  // to sekunder naar den staar hoyt.
+  const tau = 300 + SMOOTH * 1900;
+  const k = 1 - Math.exp(-dt / tau);
+  const kj = 1 - Math.exp(-dt / 90);      // rykket faller paa under ti rammer
+
+  g.fillStyle = pal.sky; g.fillRect(0, 0, W, H);
+
+  const step = Math.max(6, Math.round(W / 110));
+  for (let i = 0; i < 3; i++) {
+    const b = AURORA[i];
+    AS[i] += (relative(b.lvl) - AS[i]) * k;
+    AJ[i] += (Math.min(1.4, S[b.hit]) - AJ[i]) * kj;
+    const e = AS[i], j = AJ[i];
+
+    const cy  = b.y - (b.lift * e + b.snap * j) * GAIN;
+    const amp = b.amp * (0.75 + e * 0.9 * GAIN + j * 0.35);
+
+    g.fillStyle = pal[b.col];
+    g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + step; x += step) {
+      const u = x / W;
+      const y = H * (cy
+        + Math.sin(u * b.w1 * Math.PI + t * b.sp * 6 + b.ph) * amp
+        + Math.sin(u * b.w2 * Math.PI - t * b.sp * 4 + b.ph * 1.7) * amp * 0.45);
+      g.lineTo(x, y);
+    }
+    g.lineTo(W + step, H); g.closePath(); g.fill();
+  }
+}
+
+// ===========================================================================
+//  2. SPRETT — en kule per baand, ekte tyngdekraft, kastet av slaget
+// ===========================================================================
+const GROUND = 0.86;
+const BALLS = [
+  { hit:'hitKick', lvl:'kick', col:'l3', x:0.26, r:0.115, push:1.00, y:0, vy:0 },
+  { hit:'hitMid',  lvl:'mid',  col:'l2', x:0.50, r:0.090, push:0.80, y:0, vy:0 },
+  { hit:'hitAir',  lvl:'air',  col:'l1', x:0.74, r:0.068, push:0.62, y:0, vy:0 },
+];
+const G = 5.2;                     // skjermhoyder per sekund^2
+let groundKick = 0;
+
+function drawBounce(t, dt) {
+  const s = Math.min(dt, 50) / 1000;   // et hakk i bildestrommen skal ikke
+                                       // sende kulene ut av skjermen
+  g.fillStyle = pal.sky; g.fillRect(0, 0, W, H);
+
+  groundKick += (Math.min(1, S.hitKick * 0.6) - groundKick) * (1 - Math.exp(-dt/70));
+  const gy = H * (GROUND + groundKick * 0.012);
+
+  for (const b of BALLS) {
+    // Kast bare naar kula er nede. Uten det legger hvert slag fart til en
+    // kule som allerede stiger, og hi-hat paa aattendedeler skyter den ut
+    // av skjermen paa fire slag.
+    const hit = struck(b.hit, 0.30);
+    if (hit && b.y < 0.02) {
+      const v = (0.85 + Math.min(hit, 2) * 0.42) * b.push * GAIN;
+      b.vy = Math.min(v, Math.sqrt(2 * G * 0.68));   // toppunkt innenfor bildet
+    }
+    b.vy -= G * s;
+    b.y  += b.vy * s;
+    if (b.y <= 0) {
+      b.y = 0;
+      b.vy = Math.abs(b.vy) * 0.34;              // sprett med demping
+      if (b.vy < 0.25) b.vy = 0;
+    }
+
+    const lvl = relative(b.lvl);
+    const r = H * b.r * (0.72 + lvl * 0.5 * GAIN);
+    // Klem naar den er i bakken og flat naar den stiger: en kule som bare
+    // flytter seg ser ut som et bilde, en som deformerer ser levende ut.
+    const sq = b.y < 0.004 ? 1 - Math.min(0.35, Math.abs(b.vy) * 0.16) : 1;
+    const rx = r / Math.sqrt(sq), ry = r * sq;
+    const cx = W * b.x + Math.sin(t * 0.9 + b.x * 8) * W * 0.012;
+    const cy = gy - ry - H * b.y;
+
+    g.fillStyle = pal[b.col];
+    g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); g.fill();
+  }
+
+  g.fillStyle = pal.l4;
+  g.fillRect(0, gy, W, H - gy + 2);
+}
+
+// ===========================================================================
+//  3. PULS — flate ringer skutt ut paa hvert slag
+// ===========================================================================
+const RING_SRC = [
+  { hit:'hitKick', col:'l3', cx:0.50, cy:0.56, sp:0.85, w:0.090, rise:0.30, cool:150 },
+  { hit:'hitMid',  col:'l2', cx:0.27, cy:0.36, sp:1.15, w:0.055, rise:0.32, cool:180 },
+  { hit:'hitAir',  col:'l1', cx:0.76, cy:0.30, sp:1.55, w:0.035, rise:0.38, cool:230 },
+];
+// Fast basseng: ringer gjenbrukes, ingen allokering mens det spilles.
+const RINGS = Array.from({ length: 18 }, () => ({ on:false, r:0, sp:0, w:0, col:'l1', cx:0, cy:0, src:0 }));
+const ringCool = [0, 0, 0];
+const RING_CAP = [6, 5, 4];      // hoyeste antall samtidige per kilde
+
+function drawPulse(t, dt) {
+  g.fillStyle = pal.sky; g.fillRect(0, 0, W, H);
+  const s = Math.min(dt, 50) / 1000;
+  const diag = Math.hypot(W, H) / H;
+
+  for (let i = 0; i < 3; i++) {
+    const src = RING_SRC[i];
+    ringCool[i] = Math.max(0, ringCool[i] - dt);
+    const hit = struck(src.hit, src.rise);
+    // Uten sperre og tak blir aatte hi-hat i sekundet til et garnnostte.
+    if (!hit || ringCool[i] > 0) continue;
+    let live = 0;
+    for (const r of RINGS) if (r.on && r.src === i) live++;
+    if (live >= RING_CAP[i]) continue;
+    const free = RINGS.find(r => !r.on);
+    if (!free) continue;
+    ringCool[i] = src.cool;
+    free.on = true; free.r = 0; free.src = i;
+    free.sp = src.sp * (0.75 + Math.min(hit, 2) * 0.3);
+    free.w  = src.w * (0.7 + Math.min(hit, 2) * 0.5) * GAIN;
+    free.col = src.col; free.cx = src.cx; free.cy = src.cy;
+  }
+
+  for (const r of RINGS) {
+    if (!r.on) continue;
+    r.r += r.sp * s;
+    if (r.r - r.w > diag) { r.on = false; continue; }
+    const outer = H * r.r, inner = H * Math.max(0, r.r - r.w);
+    g.fillStyle = pal[r.col];
+    g.beginPath();
+    g.arc(W * r.cx, H * r.cy, outer, 0, Math.PI * 2);
+    g.arc(W * r.cx, H * r.cy, inner, 0, Math.PI * 2, true);
+    g.fill();
+  }
+}
+
+// ===========================================================================
+//  4. SOL — skiven hopper paa kicken, stripene skjelver med diskanten
+// ===========================================================================
+let sunPop = 0, sunLift = 0;
+function drawSun(t, dt) {
+  const kf = 1 - Math.exp(-dt / 110), kl = 1 - Math.exp(-dt / 700);
+  sunPop  += (Math.min(1.3, S.hitKick) - sunPop) * kf;
+  sunLift += (relative('kick') - sunLift) * kl;
+
+  g.fillStyle = pal.sky; g.fillRect(0, 0, W, H);
+
+  const cx = W * 0.5;
+  const cy = H * (0.56 - sunLift * 0.06 * GAIN - sunPop * 0.035 * GAIN);
+  const R  = Math.min(W, H) * (0.28 + sunLift * 0.05 * GAIN + sunPop * 0.045 * GAIN);
+
+  g.fillStyle = pal.l1;
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+
+  // Striper i himmelfarge kutter skiven nedenfra. Avstanden krymper mot
+  // bunnen, som paa en gammel solnedgangsplakat; diskanten skyver dem.
+  g.fillStyle = pal.sky;
+  const shift = (t * 0.10 + S.hitAir * 0.02) % 1;
+  for (let i = 0; i < 9; i++) {
+    const f = (i + shift) / 9;
+    const y = cy - R * 0.10 + R * 1.15 * f * f;
+    const h = R * (0.020 + f * 0.075);
+    if (y > cy + R) break;
+    g.fillRect(cx - R - 2, y, R * 2 + 4, h);
+  }
+
+  // To aaser foran, den fremste driver med mellomtonen.
+  const hills = [
+    { col:'l2', y:0.74, amp:0.030, w:2.1, sp:0.5, lvl:'mid'  },
+    { col:'l4', y:0.88, amp:0.022, w:1.4, sp:0.3, lvl:'kick' },
+  ];
+  const step = Math.max(6, Math.round(W / 100));
+  for (const hl of hills) {
+    const e = relative(hl.lvl);
+    g.fillStyle = pal[hl.col];
+    g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + step; x += step) {
+      const u = x / W;
+      g.lineTo(x, H * (hl.y - e * 0.02 * GAIN
+        + Math.sin(u * hl.w * Math.PI + t * hl.sp) * hl.amp * (0.8 + e * 0.7)));
+    }
+    g.lineTo(W + step, H); g.closePath(); g.fill();
+  }
+}
+
+// ===========================================================================
+//  Lyd
+// ===========================================================================
+let ctx = null, features = null, startTime = 0, source = null;
+
+async function startDemo() {
+  ctx = ctx || new AudioContext();
+  await ctx.resume();
+  stopSource();
+
+  // Enkel varm loop: puls + pad. Nok dynamikk til aa vurdere bevegelse.
+  const dur = 8, sr = ctx.sampleRate;
+  const buf = ctx.createBuffer(1, sr * dur, sr);
+  const d = buf.getChannelData(0);
+  const chords = [[110,138.6,164.8],[98,123.5,146.8],[87.3,110,130.8],[98,123.5,164.8]];
+  for (let i = 0; i < d.length; i++) {
+    const t = i / sr;
+    const ch = chords[Math.floor(t / 2) % 4];
+    let v = 0;
+    for (const f of ch) v += Math.sin(2*Math.PI*f*t) * 0.10;
+    v += Math.sin(2*Math.PI*ch[0]*2*t) * 0.04 * (0.5 + 0.5*Math.sin(t*0.7));
+    const beat = t % 0.5;
+    v += Math.sin(2*Math.PI*55*beat) * Math.exp(-beat*22) * 0.42;      // puls
+    const hat = t % 0.25;
+    v += (Math.random()*2-1) * Math.exp(-hat*90) * 0.05;                // lett anslag
+    d[i] = v * 0.7;
+  }
+  playBuffer(buf, true);
+  document.getElementById('hint').textContent = 'Demolyd. Dra inn en fil for ekte musikk.';
+}
+
+function playBuffer(buf, loop) {
+  stopSource();
+  features = extractFeatures(buf.getChannelData(0), buf.sampleRate);
+
+  source = ctx.createBufferSource();
+  source.buffer = buf; source.loop = !!loop;
+  const gain = ctx.createGain(); gain.gain.value = 0.5;
+  source.connect(gain).connect(ctx.destination);
+  source.start();
+  startTime = ctx.currentTime;
+}
+
+function stopSource() { if (source) { try { source.stop(); } catch {} source = null; } }
+
+// --- Dra inn en fil -------------------------------------------------------
+const drop = document.getElementById('drop');
+addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('on'); });
+addEventListener('dragleave', () => drop.classList.remove('on'));
+addEventListener('drop', async e => {
+  e.preventDefault(); drop.classList.remove('on');
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  ctx = ctx || new AudioContext(); await ctx.resume();
+  document.getElementById('hint').textContent = 'Leser ' + f.name + '…';
+  try {
+    const buf = await ctx.decodeAudioData(await f.arrayBuffer());
+    playBuffer(buf, true);
+    document.getElementById('hint').textContent = f.name;
+    document.getElementById('start').style.display = 'none';
+  } catch (err) {
+    document.getElementById('hint').textContent = 'Klarte ikke lese den fila.';
+  }
+});
+
+// ===========================================================================
+//  Loop
+// ===========================================================================
+let VARIANT = 'aurora', GAIN = 1, SMOOTH = 0.8, FPS = 30;
+let lastFrame = 0, frameMs = 0, fpsAvg = 0, lateFrames = 0;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+
+  const interval = 1000 / FPS;
+  if (now - lastFrame < interval - 1) return;      // rammetak
+  const dt = now - lastFrame; lastFrame = now;
+  const t0 = performance.now();
+
+  // --- hent trekk for det som spilles NAA ---------------------------------
+  if (features && ctx && source) {
+    const pos = ctx.currentTime - startTime;
+    const idx = Math.floor(pos * features.sampleRate / features.block) % features.level.length;
+    const k = SMOOTH;
+    S.level = smoothTo(S.level, features.level[idx], k);
+    S.kick  = smoothTo(S.kick,  features.kick[idx],  k);
+    S.mid   = smoothTo(S.mid,   features.mid[idx],   k);
+    S.air   = smoothTo(S.air,   features.air[idx],   k);
+    // Anslag skal IKKE glattes som nivaa — det er hele poenget med dem.
+    // De faar rask attakk og styrt fall, saa et slag leses som et slag.
+    const dk = Math.pow(0.86, dt / 16.7);
+    S.hitKick = Math.max(S.hitKick * dk, features.hitKick[idx]);
+    S.hitMid  = Math.max(S.hitMid  * dk, features.hitMid[idx]);
+    S.hitAir  = Math.max(S.hitAir  * dk, features.hitAir[idx]);
+    S.beat    = Math.max(S.beat * dk, features.beat[idx]);
+    S.pulse   = Math.min(1, S.beat * 0.55);
+  }
+  S.phase += dt * 0.0006;
+  const t = S.phase;
+
+  // --- tegn ---------------------------------------------------------------
+  // Hver variant maler sin egen himmel — ingen bakgrunnsfylling paa forhaand.
+  if      (VARIANT === 'bounce') drawBounce(t, dt);
+  else if (VARIANT === 'pulse')  drawPulse(t, dt);
+  else if (VARIANT === 'sun')    drawSun(t, dt);
+  else                           drawAurora(t, dt);
+
+  // Anslagsmaalere hver ramme — de skal rykke i takt, ikke oppdatere seg
+  // fire ganger i sekundet.
+  for (const b of BARS) {
+    if (!b[2]) b[2] = document.getElementById(b[0]);
+    b[2].style.width = Math.min(100, S[b[1]] * 55).toFixed(0) + '%';
+  }
+
+  // --- budsjettmaaler -----------------------------------------------------
+  frameMs = frameMs * 0.9 + (performance.now() - t0) * 0.1;
+  fpsAvg  = fpsAvg  * 0.9 + (1000 / Math.max(dt, 1)) * 0.1;
+  if (frameMs > interval * 0.5) lateFrames++;
+
+  if ((now | 0) % 8 === 0) {
+    document.getElementById('mFps').textContent = fpsAvg.toFixed(0);
+    document.getElementById('mMs').textContent  = frameMs.toFixed(1);
+    const b = document.getElementById('mBudget');
+    const share = frameMs / interval;
+    b.textContent = share < 0.25 ? 'god margin'
+                  : share < 0.5  ? 'grei margin'
+                  : 'TUNG — ville skrudd ned i appen';
+    b.className = share < 0.5 ? '' : 'warn';
+  }
+}
+
+// ===========================================================================
+//  Kontroller
+// ===========================================================================
+document.getElementById('variants').onclick = e => {
+  if (!e.target.dataset.v) return;
+  VARIANT = e.target.dataset.v;
+  [...e.currentTarget.children].forEach(b => b.classList.toggle('on', b === e.target));
+  syncLegend();
+};
+document.getElementById('palettes').onclick = e => {
+  if (!e.target.dataset.p) return;
+  pal = PALETTES[e.target.dataset.p]; buildGradients();
+  [...e.currentTarget.children].forEach(b => b.classList.toggle('on', b === e.target));
+  syncLegend();
+};
+
+// Anslagsmaalerne viser hva deteksjonen faktisk fanger, slik at du kan se om
+// den folger trommene eller bare nivaaet.
+const BARS = [['bKick','hitKick'], ['bMid','hitMid'], ['bAir','hitAir']];
+function syncLegend() {
+  document.getElementById('legend').style.display = 'block';
+  for (const [id] of BARS) document.getElementById(id).style.background = pal.l2;
+}
+syncLegend();
+document.getElementById('gain').oninput   = e => { GAIN = +e.target.value;
+  document.getElementById('vGain').textContent = GAIN.toFixed(1); };
+document.getElementById('smooth').oninput = e => { SMOOTH = +e.target.value;
+  document.getElementById('vSmooth').textContent = SMOOTH.toFixed(2); };
+document.getElementById('fps').oninput    = e => { FPS = +e.target.value;
+  document.getElementById('vFps').textContent = FPS; };
+
+document.getElementById('start').onclick = async () => {
+  document.getElementById('start').style.display = 'none';
+  await startDemo();
+};
+
+// Skjul panelet med tasten H, sa du kan se det rene bildet
+addEventListener('keydown', e => {
+  if (e.key === 'h' || e.key === 'H') {
+    const p = document.getElementById('panel'), t = document.getElementById('toggle');
+    const hide = p.style.display !== 'none';
+    p.style.display = hide ? 'none' : '';
+    t.style.display = hide ? 'block' : 'none';
+  }
+});
+document.getElementById('toggle').onclick = () => {
+  document.getElementById('panel').style.display = '';
+  document.getElementById('toggle').style.display = 'none';
+};
+
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
