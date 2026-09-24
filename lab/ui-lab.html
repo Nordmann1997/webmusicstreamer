@@ -38,6 +38,9 @@
   #lavagl { display: none; }
   body.m-lavagl #bg { display: none; }
   body.m-lavagl #lavagl { display: block; }
+  #lava2 { display: none; }
+  body.m-lava2 #bg { display: none; }
+  body.m-lava2 #lava2 { display: block; }
 
   /* Alt innhold i ett rutenett: tittel oppe, valg i midten, forsinkelse nede.
      Midtraden tar plassen som blir til overs, sa bunnlinja staar stille naar
@@ -305,6 +308,7 @@
 <canvas id="bg"></canvas>
 <canvas id="lava"></canvas>
 <canvas id="lavagl"></canvas>
+<canvas id="lava2"></canvas>
 <div class="drop" id="drop">Drop an audio file to use it instead of the demo tone</div>
 <input type="file" id="file" accept="audio/*" hidden>
 
@@ -380,6 +384,8 @@
   <button data-mode="bars" class="on">Bars</button>
   <button data-mode="rave">Rave</button>
   <button data-mode="disco">Disco</button>
+  <button data-mode="lava2">Lava 2</button>
+  <button data-mode="disco2">Disco 2</button>
 </div>
 
 <button id="editBtn">Edit</button>
@@ -468,7 +474,7 @@ const GAIN = 0.6, SMOOTH = 0.69;
 // to skjermbilder, og det leses som hakking. Flatene i Aurora og soylene i
 // Bars koster 0,1 ms, saa 60 er gratis der. Lavalampa koster 1,5 ms og faar
 // bli paa 30: der er det ingenting som glir raskt nok til at det syns.
-const FPS_FOR = { aurora: 60, bars: 60, rave: 60, disco: 60, lava: 30, lavagl: 60 };
+const FPS_FOR = { aurora: 60, bars: 60, rave: 60, disco: 60, disco2: 60, lava: 30, lava2: 30, lavagl: 60 };
 let FPS = 60;
 
 const S  = { kick:0, mid:0, air:0, hitKick:0, hitMid:0, hitAir:0, phase:0, sub:0 };
@@ -1367,6 +1373,496 @@ function drawDisco(dt) {
 }
 
 // ===========================================================================
+//  Disco 2 — lysflekkene kommer FRA speilene
+// ===========================================================================
+// I den forste diskokula var flekkene paa veggen tilfeldige punkter som
+// snurret rundt. Her er de ekte refleksjoner: for hvert speil speiles lyset
+// fra de to lyskasterne om speilets normal, og der den straalen treffer
+// bakveggen blir det en flekk. Naar kula snurrer, feier flekkene over rommet
+// slik de gjor i virkeligheten — de henger sammen med kula, ikke med en
+// tilfeldig bane.
+//
+// Kostnaden er den samme som foer: tre skalarprodukter per speil og lys, og
+// hver flekk er ETT drawImage av en ferdig tegnet prikk. Ingen gradient per
+// flekk, ingen filter, ingen fargestrenger i sloyfa.
+// Lyskasterne staar ute paa sidene, ikke rett foran. Da faller glansen paa
+// hver sin side av kula, og flere straaler kastes bakover mot veggen.
+const D2_LA = [-0.82, -0.40, 0.41];         // retning MOT lys A (venstre, litt over)
+const D2_LB = [ 0.80, -0.32, 0.51];         // retning MOT lys B (hoyre, litt over)
+const D2_MAXSPOT = 260, D2_MAXBEAM = 26, D2_MAXGLINT = 9;
+const d2SX = new Float32Array(D2_MAXSPOT), d2SY = new Float32Array(D2_MAXSPOT);
+const d2SS = new Float32Array(D2_MAXSPOT), d2SA = new Float32Array(D2_MAXSPOT);
+const d2SL = new Uint8Array(D2_MAXSPOT), d2SFX = new Float32Array(D2_MAXSPOT), d2SFY = new Float32Array(D2_MAXSPOT);
+const d2GX = new Float32Array(D2_MAXGLINT), d2GY = new Float32Array(D2_MAXGLINT), d2GV = new Float32Array(D2_MAXGLINT);
+const D2_TAB_N = new Array(24);             // soelv — speil som ikke fanger noe lys
+for (let i = 0; i < 24; i++) {
+  const u = i / 23;
+  // Lysere soelv enn foer: kula skal se ut som speil, ikke som mork stein.
+  D2_TAB_N[i] = `hsl(230 ${(8 + u * 4).toFixed(0)}% ${(20 + u * 52).toFixed(0)}%)`;
+}
+let d2Spr = null, d2SprHue = -999, d2Star = null;
+// Ekte speil sitter aldri helt rett. Et lite, fast skjevt vinkel per speil
+// sprer glansen og flekkene utover hele kula i stedet for at alt lys havner
+// i én flekk oppe til venstre.
+let d2Nx = null, d2Ny = null, d2Nz = null;
+function d2Normals() {
+  d2Nx = new Float32Array(D_N); d2Ny = new Float32Array(D_N); d2Nz = new Float32Array(D_N);
+  for (let i = 0; i < D_N; i++) {
+    const x = dNx[i] + (_hash(i, 41) - 0.5) * 0.34;
+    const y = dNy[i] + (_hash(i, 42) - 0.5) * 0.34;
+    const z = dNz[i] + (_hash(i, 43) - 0.5) * 0.34;
+    const l = Math.hypot(x, y, z);
+    d2Nx[i] = x / l; d2Ny[i] = y / l; d2Nz[i] = z / l;
+  }
+}
+// Klassisk kule: hvitt lys, ingen farger. Speil som fanger lyskasteren
+// gaar fra lyst soelv til rent hvitt.
+const D2_TW = Array.from({ length: 24 }, (_, i) => {
+  const u = i / 23;
+  return `hsl(220 ${(12 - u * 12).toFixed(0)}% ${(62 + u * 38).toFixed(0)}%)`;
+});
+let d2Rot = 0, d2Hue = 32, d2Pulse = 0, d2Flash = 0, d2LastFlash = 0;
+let d2PrevKick = 0, d2PrevAir = 0, d2RS = 0, d2CyS = 0;
+let d2BeamA = null, d2BeamB = null, d2BeamKey = '';
+
+/** En myk prikk per lys, tegnet en gang og gjenbrukt for hver flekk. */
+function d2Dot(h, sat = 100) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d');
+  const gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0,    `hsla(${h} ${sat}% 100% / 1)`);
+  gr.addColorStop(0.16, `hsla(${h} ${sat}% 92% / .9)`);
+  gr.addColorStop(0.42, `hsla(${h} ${sat}% 85% / .20)`);
+  gr.addColorStop(1,    `hsla(${h} ${sat}% 80% / 0)`);
+  x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+  return c;
+}
+/** Glimtet i et speil som treffer oyet ditt: et firearmet kors med kjerne. */
+function d2MakeStar() {
+  const c = document.createElement('canvas'); c.width = c.height = 96;
+  const x = c.getContext('2d');
+  x.globalCompositeOperation = 'lighter';
+  for (const [w, h] of [[96, 3], [3, 96]]) {
+    const gr = w > h ? x.createLinearGradient(0, 0, 96, 0) : x.createLinearGradient(0, 0, 0, 96);
+    gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.5, 'rgba(255,255,255,.95)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = gr; x.fillRect((96 - w) / 2, (96 - h) / 2, w, h);
+  }
+  const core = x.createRadialGradient(48, 48, 0, 48, 48, 18);
+  core.addColorStop(0, 'rgba(255,255,255,1)'); core.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = core; x.fillRect(30, 30, 36, 36);
+  return c;
+}
+
+function drawDisco2(dt) {
+  const s = Math.min(dt, 50) / 1000;
+  const now = performance.now();
+
+  const bass = bandRel(0) * 0.6 + bandRel(1) * 0.4;
+  const mid  = bandRel(4) * 0.5 + bandRel(5) * 0.5;
+  const air  = bandRel(8) * 0.5 + bandRel(9) * 0.5;
+
+  const kickHit = rose(S.hitKick, d2PrevKick, 0.33); d2PrevKick = S.hitKick;
+  const airHit  = rose(S.hitAir,  d2PrevAir,  0.50); d2PrevAir  = S.hitAir;
+  if (kickHit) d2Pulse = Math.min(1.15, d2Pulse + kickHit * 0.8);
+  d2Pulse *= Math.pow(0.010, s);
+  // Samme sperre paa 300 ms som strobet i Rave.
+  if ((kickHit || airHit) && now - d2LastFlash > 300) {
+    d2Flash = kickHit ? 1 : 0.45; d2LastFlash = now;
+  }
+  d2Flash *= Math.pow(0.004, s);
+
+  d2Hue += s * 5 * (0.4 + mid);
+  // Sakte. En ekte kule gaar rundt paa 10-20 sekunder; det er flekkene som
+  // skal bevege seg fort, og de gjor det fordi de er langt unna.
+  d2Rot += s * (0.16 + mid * 0.30 + d2Pulse * 0.25) * GAIN;
+
+  // Hvitt lys. Prikkene tegnes en gang og brukes resten av okta.
+  if (!d2Spr) { const w = d2Dot(40, 0); d2Spr = [w, w]; }
+  if (!d2Star) d2Star = d2MakeStar();
+
+  if (!dBg || dBgH !== H) {
+    dBg = g.createLinearGradient(0, 0, 0, H);
+    dBg.addColorStop(0, '#0d0a17'); dBg.addColorStop(1, '#05040a');
+    dBgH = H;
+  }
+  g.fillStyle = dBg; g.fillRect(0, 0, W, H);
+
+  const minWH = Math.min(W, H);
+  const tR  = minWH * (TOP_LIMIT < 0.16 ? 0.19 : 0.155);
+  // Lenger ned enn den forste: kula henger i rommet, ikke oppe i taket.
+  // Aldri saa langt at den naar ned i knappene.
+  const tCy = Math.min(H * 0.50, H * (TOP_LIMIT + 0.17) + tR);
+  if (!d2RS) { d2RS = tR; d2CyS = tCy; }
+  const kf = 1 - Math.exp(-dt / 220);
+  d2RS += (tR - d2RS) * kf; d2CyS += (tCy - d2CyS) * kf;
+  const cx = W / 2, cy = d2CyS;
+  const R = d2RS * (1 + d2Pulse * 0.05 + bass * 0.04);
+
+  const ca = Math.cos(d2Rot), sa = Math.sin(d2Rot);
+  const lightI = 0.42 + bass * 0.55 + d2Pulse * 0.55;
+  const WALL = R * 2.4;                     // avstand til bakveggen, i skjermenheter
+  const minSp = minWH * 0.010, maxSp = minWH * 0.060;
+  const gl = 1.0 + d2Pulse * 0.8 + air * 0.6;
+  if (!d2Nx || d2Nx.length !== D_N) d2Normals();
+
+  // --- en runde over alle speil: flekker, glimt og farge ---------------------
+  // Fargen til de synlige speilene lagres som indeks i tabellene, saa vi
+  // slipper aa regne dem ut en gang til naar de skal tegnes.
+  let ns = 0, ng = 0;
+  const L = [D2_LA, D2_LB];
+  if (!drawDisco2.tile || drawDisco2.tile.length !== D_N) drawDisco2.tile = new Int16Array(D_N);
+  const tile = drawDisco2.tile;
+  for (let i = 0; i < D_N; i++) {
+    const ax = d2Nx[i], ay = d2Ny[i], az = d2Nz[i];
+    const nx = ax * ca + az * sa, ny = ay, nz = az * ca - ax * sa;
+    let bestSpec = 0, bestL = 0, bestD = 0;
+
+    for (let l = 0; l < 2; l++) {
+      const Lv = L[l];
+      const ndl = nx * Lv[0] + ny * Lv[1] + nz * Lv[2];
+      if (ndl <= 0) continue;
+      // Refleksjon av lysretningen om normalen: R = 2(n·L)n - L
+      const rx = 2 * ndl * nx - Lv[0], ry = 2 * ndl * ny - Lv[1], rz = 2 * ndl * nz - Lv[2];
+      if (rz > bestSpec) { bestSpec = rz; bestL = l; }
+      if (ndl > bestD) bestD = ndl;
+
+      // Gaar straalen bakover, treffer den veggen bak kula.
+      if (rz < -0.08 && ns < D2_MAXSPOT) {
+        const t = 1 / -rz;
+        const ox = rx * t * WALL, oy = ry * t * WALL;
+        const x = cx + nx * R + ox, y = cy + ny * R + oy;
+        if (x < -maxSp || x > W + maxSp || y < -maxSp || y > H + maxSp) continue;
+        // Innenfor kula ville flekken vaert skjult bak den.
+        const qx = x - cx, qy = y - cy;
+        if (qx * qx + qy * qy < R * R * 1.1) continue;
+        const tw = 0.75 + 0.25 * Math.sin(S.phase * 9 + i * 1.7 + l);
+        d2SX[ns] = x; d2SY[ns] = y; d2SL[ns] = l;
+        d2SFX[ns] = cx + nx * R; d2SFY[ns] = cy + ny * R;
+        d2SS[ns] = Math.min(maxSp, minSp * (0.8 + t * 0.55) * (0.8 + d2Pulse * 0.45));
+        // Lengre vei = svakere flekk, som med en ekte lyskaster.
+        d2SA[ns] = Math.min(1, ndl * lightI * tw * (1.25 - Math.min(0.75, t * 0.12)));
+        ns++;
+      }
+    }
+
+    // Synlig kant av speilet: bruk den UJUSTERTE normalen, ellers stikker
+    // skjeve speil fram paa baksida.
+    if (dNz[i] * ca - dNx[i] * sa <= 0.02) { tile[i] = -1; continue; }
+    // Et speil som ikke fanger lys, speiler et morkt rom: soelv med litt
+    // tilfeldig variasjon, og litt lysere oppover mot taket.
+    let v = 0.22 + dBias[i] * 1.1 + nz * 0.10 - ny * 0.12 + bestD * 0.22;
+    let tint = 0;
+    if (bestSpec > 0) {
+      const p2 = bestSpec * bestSpec, p4 = p2 * p2, p8 = p4 * p4, p16 = p8 * p8;
+      // ^20: smal. Sammen med de skjeve speilene gir det spredte, glitrende
+      // speil over hele kula i stedet for en sammenhengende flekk.
+      const col = p16 * p4 * gl * 1.3;
+      if (col > 0.10) { tint = 1; v = col; }
+      if (bestSpec > 0.985 && ng < D2_MAXGLINT) {
+        d2GX[ng] = cx + nx * R; d2GY[ng] = cy + ny * R;
+        d2GV[ng] = (bestSpec - 0.985) / 0.015; ng++;
+      }
+    }
+    const k = v <= 0 ? 0 : v >= 1 ? 23 : (v * 23) | 0;
+    tile[i] = tint * 24 + k;
+  }
+
+  g.globalCompositeOperation = 'lighter';
+
+  // --- straaler fra kula ut til de sterkeste flekkene -----------------------
+  // Én gradient per lys, sentrert i kula, delt av alle straalene. Den lages
+  // paa nytt bare naar kula flytter seg eller fargen endrer seg.
+  const bKey = `${cx|0},${cy|0},${R|0}`;
+  if (bKey !== d2BeamKey) {
+    const far = Math.hypot(W, H) * 0.7;
+    d2BeamA = g.createRadialGradient(cx, cy, R, cx, cy, far);
+    d2BeamA.addColorStop(0, 'rgba(255,250,240,.16)');
+    d2BeamA.addColorStop(1, 'rgba(255,250,240,0)');
+    d2BeamB = d2BeamA;
+    d2BeamKey = bKey;
+  }
+  const haze = 0.35 + bass * 0.6 + d2Pulse * 0.5;
+  const step = Math.max(1, Math.ceil(ns / D2_MAXBEAM));
+  for (let l = 0; l < 2; l++) {
+    g.fillStyle = l ? d2BeamB : d2BeamA;
+    g.globalAlpha = Math.min(1, haze);
+    g.beginPath();
+    for (let j = l; j < ns; j += step) {
+      if (d2SL[j] !== l || d2SA[j] < 0.35) continue;
+      const fx = d2SFX[j], fy = d2SFY[j], x = d2SX[j], y = d2SY[j];
+      const dx = x - fx, dy = y - fy, len = Math.hypot(dx, dy) || 1;
+      const w = d2SS[j] * 0.45, px = -dy / len * w, py = dx / len * w;
+      g.moveTo(fx, fy); g.lineTo(x + px, y + py); g.lineTo(x - px, y - py); g.closePath();
+    }
+    g.fill();
+  }
+
+  // --- flekkene paa veggen -----------------------------------------------
+  for (let j = 0; j < ns; j++) {
+    const sz = d2SS[j] * 2.6;
+    g.globalAlpha = d2SA[j];
+    g.drawImage(d2Spr[d2SL[j]], d2SX[j] - sz / 2, d2SY[j] - sz / 2, sz, sz);
+  }
+  g.globalAlpha = 1;
+
+  // --- glorie ----------------------------------------------------------------
+  const hg = g.createRadialGradient(cx, cy, R * 0.8, cx, cy, R * 2.2);
+  hg.addColorStop(0, `rgba(255,248,236,${(0.08 + bass * 0.14).toFixed(3)})`);
+  hg.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = hg;
+  g.beginPath(); g.arc(cx, cy, R * 2.2, 0, 6.2832); g.fill();
+
+  g.globalCompositeOperation = 'source-over';
+
+  // --- snor og kropp ----------------------------------------------------------
+  g.strokeStyle = 'rgba(232,226,246,.26)';
+  g.lineWidth = Math.max(1, minWH * 0.003);
+  g.beginPath(); g.moveTo(cx, 0); g.lineTo(cx, cy - R * 0.99); g.stroke();
+  g.fillStyle = '#16141d';
+  g.beginPath(); g.arc(cx, cy, R * 1.01, 0, 6.2832); g.fill();
+
+  // --- speilene ---------------------------------------------------------------
+  const TABS = [D2_TAB_N, D2_TW, D2_TW];
+  for (let i = 0; i < D_N; i++) {
+    const tv = tile[i];
+    if (tv < 0) continue;
+    g.fillStyle = TABS[(tv / 24) | 0][tv % 24];
+    const o = i * 4;
+    g.beginPath();
+    for (let c = 0; c < 4; c++) {
+      const X = cx + (dQx[o + c] * ca + dQz[o + c] * sa) * R;
+      const Y = cy + dQy[o + c] * R;
+      c === 0 ? g.moveTo(X, Y) : g.lineTo(X, Y);
+    }
+    g.closePath(); g.fill();
+  }
+
+  const vg = g.createRadialGradient(cx - R * 0.34, cy - R * 0.38, R * 0.04, cx, cy, R * 1.02);
+  vg.addColorStop(0, 'rgba(255,255,255,.10)');
+  vg.addColorStop(0.62, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(5,4,10,.60)');
+  g.fillStyle = vg;
+  g.beginPath(); g.arc(cx, cy, R * 1.02, 0, 6.2832); g.fill();
+
+  // --- glimt der et speil sender lyset rett mot deg ---------------------------
+  if (ng) {
+    g.globalCompositeOperation = 'lighter';
+    for (let j = 0; j < ng; j++) {
+      const sz = R * (0.22 + d2GV[j] * 0.28) * (1 + d2Pulse * 0.6);
+      g.globalAlpha = Math.min(1, 0.35 + d2GV[j] * 0.65);
+      g.drawImage(d2Star, d2GX[j] - sz / 2, d2GY[j] - sz / 2, sz, sz);
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  if (d2Flash > 0.02) {
+    g.fillStyle = `rgba(255,252,245,${(d2Flash * 0.10).toFixed(3)})`;
+    g.fillRect(0, 0, W, H);
+  }
+}
+
+// ===========================================================================
+//  Lava 2 — en ekte lavalampe: voksen varmes nede, stiger, kjoles, synker
+// ===========================================================================
+// Den forste lavaen lot kulene gli i en fast fart og hoppe fra toppen til
+// bunnen. En lavalampe gjor noe annet: voksen ligger i en dam i bunnen,
+// varmes til den blir lettere enn vaesken, lesner og stiger — strekt ut som
+// en draape mens den har fart — kjoles i toppen og synker tilbake. Det er
+// temperaturen som styrer, og bassen skrur opp varmen.
+//
+// Samme triks som foer for aa holde CPU-en rolig: feltet regnes i lav
+// opplosning og strekkes av kompositoren. Nytt her:
+//   * fargen slaas opp i en ferdig tabell (en per hoydesone), i stedet for
+//     tre if-er og en smoothstep per piksel,
+//   * skyggen kommer gratis fra forskjellen mot naboen til venstre og raden
+//     over — det er feltets helning, altsaa lys fra oppe til venstre,
+//   * dammene i bunn og topp er en ferdig regnet verdi per rad, ganget med en
+//     boelge per kolonne. Null ekstra arbeid per kule,
+//   * kulene bruker (1 - d²/R²)² i stedet for r²/d². Den er NULL utenfor R,
+//     saa det finnes ingen hale som kuttes der vi slutter aa regne — det var
+//     den som ga striper tvers over bildet. Og den har ingen divisjon.
+const L2_W = 200, L2_N = 11;
+const L2_T = 0.34;                        // feltverdien der voksen begynner
+const L2_FMAX = 1.9, L2_BANDS = 32;
+const L2_REACH = 2.5;                     // kulas rekkevidde, i radier
+let l2Cv = null, l2G = null, l2Img = null, l2H = 0, l2Lut = null;
+let l2Row = null, l2Prev = null, l2Pool = null, l2Wave = null;
+const L2_IDX = new Int32Array(L2_N);
+const L2B = Array.from({ length: L2_N }, (_, i) => ({
+  x: 0.12 + _hash(i, 31) * 0.76,
+  y: 0.25 + _hash(i, 32) * 0.7,
+  vy: 0, vx: 0,
+  r: 0.036 + _hash(i, 33) * 0.030,
+  T: _hash(i, 34),                        // temperatur 0-1
+  heat: 0.7 + _hash(i, 35) * 0.6,         // hvor lett den tar varme
+  ph: _hash(i, 36) * 6.283,
+  sp: 0, sv: 0, kick: 0.7 + _hash(i, 37) * 0.6,
+  isx: 1, isy: 1, r2: 0,
+}));
+
+function l2Mix(a, b, u) { return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]; }
+const _ss = u => { u = u < 0 ? 0 : u > 1 ? 1 : u; return u * u * (3 - 2 * u); };
+
+/** Fargetabell: feltverdi -> farge, en tabell per hoydesone. */
+function l2BuildLut() {
+  const hex = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+  const sky = hex(P.sky), band = hex(P.band), l1 = hex(P.l1), l2c = hex(P.l2);
+  // Voksen i terrakotta, samme familie som knappene. Toppen er kaldere og
+  // morkere, bunnen der lyspæra sitter er varmere og lysere.
+  const rimTop = hex('#7c3f2c'), bodyTop = hex('#a4583a'), coreTop = hex('#c9784c');
+  const rimBot = hex('#9b4a2d'), bodyBot = hex('#cf6f40'), coreBot = hex('#f2a66e');
+  l2Lut = new Uint8ClampedArray(L2_BANDS * 256 * 3);
+  for (let b = 0; b < L2_BANDS; b++) {
+    const v = b / (L2_BANDS - 1);                   // 0 = topp, 1 = bunn
+    // Vaesken: sand oeverst, varmt gloedende nederst.
+    const bg = l2Mix(l2Mix(band, sky, _ss(v * 1.4)), l1, _ss((v - 0.55) / 0.45) * 0.55);
+    const glow = l2Mix(l1, hex('#e4a57a'), v);
+    const rim = l2Mix(rimTop, rimBot, v), body = l2Mix(bodyTop, bodyBot, v), core = l2Mix(coreTop, coreBot, v);
+    const E = 0.035;                                  // halv kantbredde
+    for (let k = 0; k < 256; k++) {
+      const f = k / 255 * L2_FMAX;
+      const h = Math.min(1, f / L2_T);
+      const outside = l2Mix(bg, glow, 0.40 * h * h * h);  // gloed rundt voksen
+      const u = _ss((f - L2_T) / 0.9);
+      const wax = u < 0.5 ? l2Mix(rim, body, u * 2) : l2Mix(body, core, (u - 0.5) * 2);
+      const c = l2Mix(outside, wax, _ss((f - (L2_T - E)) / (2 * E)));
+      const o = (b * 256 + k) * 3;
+      l2Lut[o] = c[0]; l2Lut[o + 1] = c[1]; l2Lut[o + 2] = c[2];
+    }
+  }
+}
+
+function lava2Setup() {
+  l2H = Math.max(24, Math.round(L2_W * H / W));
+  l2Cv = document.getElementById('lava2');
+  l2Cv.width = L2_W; l2Cv.height = l2H;
+  l2G = l2Cv.getContext('2d');
+  l2Img = l2G.createImageData(L2_W, l2H);
+  for (let i = 3; i < l2Img.data.length; i += 4) l2Img.data[i] = 255;
+  l2Row = new Float32Array(L2_W); l2Prev = new Float32Array(L2_W);
+  l2Pool = new Float32Array(l2H); l2Wave = new Float32Array(L2_W);
+  const ar = l2H / L2_W;
+  // Dammene: tykk i bunnen, tynn hinne i toppen. r^2/d^2 fra en flate i
+  // stedet for et punkt, saa kuler som naermer seg smelter inn i dem.
+  // Samme kjerne som kulene, men mot en flate: tykk i bunnen, en tynn hinne
+  // i toppen der voksen samler seg foer den synker.
+  const HB = 0.10, HT = 0.035;
+  for (let py = 0; py < l2H; py++) {
+    const fy = (py + 0.5) / l2H * ar;
+    const qb = (ar - fy) / HB, qt = fy / HT;
+    const wb = qb < 1 ? 1 - qb * qb : 0, wt = qt < 1 ? 1 - qt * qt : 0;
+    // Toppen alene er under terskelen: den synes bare naar en kule kommer opp
+    // og smelter inn i den.
+    l2Pool[py] = wb * wb * 0.9 + wt * wt * 0.28;
+  }
+  if (!l2Lut) l2BuildLut();
+}
+
+function moveLava2(dt) {
+  const s = Math.min(dt, 50) / 1000;
+  const D = 2 * LAVA_ZETA * Math.sqrt(LAVA_K);
+  const maal = Math.min(1.4, S.sub / LAVA_REF);
+  const ar = l2H / L2_W;
+  for (const b of L2B) {
+    // Fjaer i bassen, som i den forste lavaen: stoerrelse og varme.
+    b.sv += ((maal - b.sp) * LAVA_K * b.kick - b.sv * D) * s;
+    b.sp += b.sv * s;
+    const e = b.sp < 0 ? 0 : b.sp;
+
+    // Varme: bunnen varmer (mer med bass), toppen kjoler, midten kjoler sakte.
+    if (b.y > 0.80) b.T += (1 - b.T) * s * (0.22 + e * 0.55) * b.heat;
+    else if (b.y < 0.22) b.T -= b.T * s * 0.30;
+    else b.T -= (b.T - 0.42) * s * 0.035;
+
+    // Oppdrift mot seigt medium: fart folger temperaturen, med treghet.
+    const lift = (b.T - 0.5) * 0.16 * (1 + e * 0.5);
+    b.vy += (-lift - b.vy * 1.6) * s;
+    b.y += b.vy * s;
+    if (b.y > 1.02) { b.y = 1.02; if (b.vy > 0) b.vy = 0; }
+    if (b.y < -0.02) { b.y = -0.02; if (b.vy < 0) b.vy = 0; }
+
+    b.vx += (Math.sin(S.phase * 0.35 + b.ph) * 0.012 - b.vx * 1.2) * s;
+    b.x += b.vx * s;
+    if (b.x < 0.08) { b.x = 0.08; b.vx = Math.abs(b.vx); }
+    if (b.x > 0.92) { b.x = 0.92; b.vx = -Math.abs(b.vx); }
+
+    // Draapeform: strekkes i fartsretningen, smalner tilsvarende.
+    const st = 1 + Math.min(0.55, Math.abs(b.vy) * 7);
+    b.isy = 1 / st; b.isx = Math.sqrt(st);
+    const r = b.r * (0.80 + e * 0.35) * L2_REACH;
+    b.iR2 = 1 / (r * r); b.reach = r * st;
+    b.yA = b.y * ar;
+  }
+}
+
+function drawLava2(dt) {
+  if (!l2Img || l2H !== Math.max(24, Math.round(L2_W * H / W))) lava2Setup();
+  moveLava2(dt);
+
+  // Dammens overflate boelger langsomt; bassen gir den et lite loft.
+  const lift = 1 + Math.min(0.35, (L2B[0].sp > 0 ? L2B[0].sp : 0) * 0.25);
+  for (let px = 0; px < L2_W; px++) {
+    const u = px / L2_W;
+    l2Wave[px] = lift * (1 + 0.22 * Math.sin(u * 9.4 + S.phase * 0.9)
+                           + 0.12 * Math.sin(u * 23.0 - S.phase * 1.3));
+  }
+
+  const d = l2Img.data, lut = l2Lut, ar = l2H / L2_W;
+  const SC = 255 / L2_FMAX;
+  let row = l2Row, prev = l2Prev;
+  let p = 0;
+  for (let py = 0; py < l2H; py++) {
+    const fy = (py + 0.5) / l2H * ar;
+    let m = 0;
+    for (let i = 0; i < L2_N; i++) {
+      const dy = fy - L2B[i].yA, re = L2B[i].reach;
+      if (dy > -re && dy < re) L2_IDX[m++] = i;
+    }
+    const pool = l2Pool[py];
+    const base = ((py / l2H * L2_BANDS) | 0) * 768;
+    let left = 0;
+    for (let px = 0; px < L2_W; px++) {
+      const fx = (px + 0.5) / L2_W;
+      let f = pool * l2Wave[px];
+      for (let j = 0; j < m; j++) {
+        const b = L2B[L2_IDX[j]];
+        const dx = (fx - b.x) * b.isx, dy = (fy - b.yA) * b.isy;
+        const q = (dx * dx + dy * dy) * b.iR2;
+        if (q < 1) { const w = 1 - q; f += w * w; }
+      }
+      const up = py ? prev[px] : f;
+      if (px === 0) left = f;
+      row[px] = f;
+
+      let k = (f * SC) | 0; if (k > 255) k = 255;
+      const o = base + k * 3;
+      let mul = 1;
+      if (f > L2_T - 0.03) {
+        // Helningen mot oppe-venstre: positiv = flaten vender mot lyset. Feltet
+        // er flatt paa toppen av en kule og bratt ved kanten, saa kanten faar
+        // lys paa den ene sida og skygge paa den andre — det er rundingen.
+        let sh = ((f - left) + (f - up)) * 2.4;
+        sh = sh < -0.30 ? -0.30 : sh > 0.36 ? 0.36 : sh;
+        // Skyggen tones inn over kanten. Uten dette fikk selve kantpikslene —
+        // halvt voks, halvt vaeske — lys, og det ga en hvit prikkete rand.
+        const inn = (f - L2_T) * 12;
+        mul = 1 + sh * (inn < 0 ? 0 : inn > 1 ? 1 : inn);
+      }
+      d[p]     = lut[o] * mul;
+      d[p + 1] = lut[o + 1] * mul;
+      d[p + 2] = lut[o + 2] * mul;
+      p += 4;
+      left = f;
+    }
+    const t = prev; prev = row; row = t;
+  }
+  l2Row = row; l2Prev = prev;
+  l2G.putImageData(l2Img, 0, 0);
+}
+
+// ===========================================================================
 //  Demolyd, slik at flatene faktisk beveger seg mens du ser paa layouten
 // ===========================================================================
 const BLOCK_MS = 20;
@@ -1524,6 +2020,8 @@ function loop(ts) {
   else if (MODE === 'lavagl')  drawLavaGL(dt);
   else if (MODE === 'rave')    drawRave(dt);
   else if (MODE === 'disco')   drawDisco(dt);
+  else if (MODE === 'disco2')  drawDisco2(dt);
+  else if (MODE === 'lava2')   drawLava2(dt);
   else if (MODE === 'bars')    drawBars(dt);
   else                         draw(dt);
 
@@ -1653,11 +2151,13 @@ document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
 function applyMode() {
   FPS = FPS_FOR[MODE] || 30;
   document.body.classList.toggle('rave', MODE === 'rave');
-  document.body.classList.toggle('disco', MODE === 'disco');
+  document.body.classList.toggle('disco', MODE === 'disco' || MODE === 'disco2');
+  document.body.classList.toggle('m-lava2', MODE === 'lava2');
   document.body.classList.toggle('m-lava', MODE === 'lava');
   document.body.classList.toggle('m-lavagl', MODE === 'lavagl');
   document.body.classList.toggle('m-bars', MODE === 'bars');
   if (MODE === 'lava') lavaSetup();
+  if (MODE === 'lava2') lava2Setup();
   // Ingen WebGL — fall tilbake til JS-lavaen i stedet for svart skjerm.
   if (MODE === 'lavagl' && !lavaGLInit()) {
     console.warn('WebGL utilgjengelig — bruker JS-lavaen.');

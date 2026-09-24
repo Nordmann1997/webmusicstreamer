@@ -40,17 +40,118 @@ function aurWave(b, u, t, amp) {
        + Math.sin(u * b.w3 * Math.PI + t * b.sp * 2.3 + b.ph * 0.6) * amp * 0.26;
 }
 
-// 260 piksler bredde, ikke 132: hver feltcelle dekker da drovt fem CSS-piksler
-// i stedet for elleve, og kantene slutter aa se kantete ut. Maalt kostnad med
-// radvis utvelging (under): 1,95 ms per bilde, seks prosent av budsjettet ved
-// 30 bilder i sekundet.
-const LAVA_W = 260;
-const LAVA_STOPS = [0.90, 1.45, 2.40];
-// r^2/d^2 faller som kvadratet av avstanden. En kule lenger unna enn drovt tre
-// og en halv ganger sin egen radius bidrar under en tidel av laveste terskel,
-// saa den kan hoppes over. Vi finner hvilke kuler som naar en RAD en gang per
-// rad, ikke en gang per piksel — det tar en firedel av tida vekk.
-const LAVA_REACH = 3.4;
+// --- lavalampe (WebGL) -----------------------------------------------------
+// Kulene henger i en fjaer festet i bassnivaaet. Baandet er smalt med vilje:
+// 18-35 Hz og 50-85 Hz, altsaa selve slaget — ingen bassgang, ingen stemmer.
+// Maalt paa ekte laater ligger medianen paa 0,04-0,07 og toppene rundt 0,13.
+const LAVA_N    = 22;
+const LAVA_REF  = 0.11;    // nivaaet som gir fullt utslag
+const LAVA_K    = 142;     // fjaerstivhet
+const LAVA_ZETA = 0.82;    // demping; under 1 gir litt ettersleng
+const LAVA_SIZE = 0.55;    // hvor mye utslaget oeker stoerrelsen
+const LAVA_LIFT = 0.90;    // hvor mye det dytter kula oppover
+const LAVA_BASE = 0.60;    // fart uten musikk
+const LAVA_T    = 1.15;    // feltverdien der lavaen begynner
+
+const LAVA_VS = `
+attribute vec2 aPos;
+varying vec2 vUV;
+void main() {
+  vUV = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+// Feltet regnes per skjermpiksel paa GPU-en. Hovedtraden gjor bare kule-
+// fysikk og ett draw-kall — det er derfor den er billigere enn den gamle,
+// som regnet 40 000 punkter i JavaScript. fwidth() gjor kanten noeyaktig én
+// piksel bred: skarp, men uten trappetrinn.
+function lavaFS(deriv) {
+  const kant = deriv
+    ? '  float w = max(fwidth(f), 1e-5);\n  float a = smoothstep(T - w, T + w, f);'
+    : '  float a = smoothstep(T - 0.045, T + 0.045, f);';
+  return (deriv ? '#extension GL_OES_standard_derivatives : enable\n' : '') + `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUV;
+uniform vec3 uBlob[${LAVA_N}];
+uniform vec3 uTop;
+uniform vec3 uBot;
+uniform vec3 uBg;
+uniform float uAR;
+const float T = ${LAVA_T.toFixed(3)};
+void main() {
+  float fx = vUV.x;
+  float fy = vUV.y * uAR;
+  float f = 0.0;
+  for (int i = 0; i < ${LAVA_N}; i++) {
+    float dx = fx - uBlob[i].x;
+    float dy = fy - uBlob[i].y * uAR;
+    f += uBlob[i].z * uBlob[i].z / (dx * dx + dy * dy + 0.0006);
+  }
+${kant}
+  gl_FragColor = vec4(mix(uBg, mix(uTop, uBot, vUV.y), a), 1.0);
+}`;
+}
+
+const _frac = v => v - Math.floor(v);
+const _hash = (i, k) => _frac(Math.sin(i * 127.1 + k * 311.7) * 43758.5453);
+
+// --- diskokule ---------------------------------------------------------------
+// Kula er ekte geometri: fasetter paa en kule, rotert om y-aksen. Bygges en
+// gang. Hvert speil sitter litt skjevt, som paa en ekte kule — det sprer
+// glansen og flekkene over hele kula.
+const DISCO = (() => {
+  const step = 12, gap = 0.46;
+  const nx = [], ny = [], nz = [], qx = [], qy = [], qz = [];
+  const R = Math.PI / 180;
+  for (let lat = -84; lat <= 84.1; lat += step) {
+    const a = lat * R, cl = Math.cos(a);
+    const n = Math.max(4, Math.round(30 * cl));
+    const a0 = (lat - step * gap) * R, a1 = (lat + step * gap) * R;
+    for (let i = 0; i < n; i++) {
+      const om = (i + 0.5) / n * Math.PI * 2;
+      nx.push(cl * Math.sin(om)); ny.push(-Math.sin(a)); nz.push(cl * Math.cos(om));
+      const o0 = (i + 0.5 - gap) / n * Math.PI * 2, o1 = (i + 0.5 + gap) / n * Math.PI * 2;
+      for (const [la, lo] of [[a0, o0], [a0, o1], [a1, o1], [a1, o0]]) {
+        const c = Math.cos(la);
+        qx.push(c * Math.sin(lo)); qy.push(-Math.sin(la)); qz.push(c * Math.cos(lo));
+      }
+    }
+  }
+  const N = nx.length;
+  const d = {
+    N, nx: Float32Array.from(nx), nz: Float32Array.from(nz),
+    qx: Float32Array.from(qx), qy: Float32Array.from(qy), qz: Float32Array.from(qz),
+    bias: Float32Array.from({ length: N }, (_, i) => (_hash(i, 21) - 0.5) * 0.26),
+    jx: new Float32Array(N), jy: new Float32Array(N), jz: new Float32Array(N),
+  };
+  for (let i = 0; i < N; i++) {
+    const x = nx[i] + (_hash(i, 41) - 0.5) * 0.34;
+    const y = ny[i] + (_hash(i, 42) - 0.5) * 0.34;
+    const z = nz[i] + (_hash(i, 43) - 0.5) * 0.34;
+    const l = Math.hypot(x, y, z);
+    d.jx[i] = x / l; d.jy[i] = y / l; d.jz[i] = z / l;
+  }
+  return d;
+})();
+// Lyskasterne staar ute paa sidene, litt over: glansen faller paa hver sin
+// side av kula, og flere straaler kastes bakover mot veggen.
+const D_LIGHTS = [[-0.82, -0.40, 0.41], [0.80, -0.32, 0.51]];
+const D_MAXSPOT = 260, D_MAXBEAM = 26, D_MAXGLINT = 9;
+// Klassisk kule, hvitt lys: soelv for speil i skygge, hvitt for dem som
+// fanger lyskasteren.
+const D_SILVER = Array.from({ length: 24 }, (_, i) => {
+  const u = i / 23;
+  return `hsl(230 ${(8 + u * 4).toFixed(0)}% ${(20 + u * 52).toFixed(0)}%)`;
+});
+const D_WHITE = Array.from({ length: 24 }, (_, i) => {
+  const u = i / 23;
+  return `hsl(220 ${(12 - u * 12).toFixed(0)}% ${(62 + u * 38).toFixed(0)}%)`;
+});
+const rose = (v, prev, thr) => (v > prev + thr && v > thr * 1.6) ? v : 0;
 
 // --- soyler ---------------------------------------------------------------
 const COL_MIN = 28, COL_MAX = 64;
@@ -106,9 +207,9 @@ export class AudioVisual {
     // Bildefrekvens per modus, valgt etter maalt kostnad. En kule som glir
     // jevnt avsloerer 30 bilder i sekundet med en gang: hver posisjon holdes
     // i to skjermbilder. Flatene og soylene koster under en ms, saa 60 er
-    // gratis der. Lavalampa koster 1,6 ms og blir paa 30 — der er det
-    // ingenting som glir raskt nok til at det syns.
-    this.fpsFor = { aurora: 60, bars: 60, rave: 60, lava: 30 };
+    // gratis der. Lavaen regnes paa GPU og diskokula koster under en ms,
+    // saa de faar ogsaa 60.
+    this.fpsFor = { aurora: 60, bars: 60, rave: 60, lava: 60, disco: 60 };
     this.fps    = opts.fps ?? this.fpsFor.bars;
     this.pressure = opts.pressure || null;
 
@@ -120,6 +221,9 @@ export class AudioVisual {
     this.bp1 = new Float64Array(EDGES.length);
     this.bp2 = new Float64Array(EDGES.length);
     this.bacc = new Float64Array(NB);
+    // To smale baand rundt 25 og 65 Hz for lavaen — bare selve slaget.
+    this.sp1 = new Float64Array(4); this.sp2 = new Float64Array(4);
+    this.s1 = 0; this.s2 = 0;
 
     this.det = {
       kick: new HitDetector(0.85, 0.30, 1.15, 0.55),
@@ -134,11 +238,12 @@ export class AudioVisual {
     this.qAir = new Float32Array(this.cap);
     this.qHK = new Float32Array(this.cap); this.qHM = new Float32Array(this.cap);
     this.qHA = new Float32Array(this.cap);
+    this.qSub = new Float32Array(this.cap);
     this.qB = Array.from({ length: NB }, () => new Float32Array(this.cap));
     this.head = 0; this.count = 0;
 
     // --- tilstand for tegninga --------------------------------------------
-    this.S = { kick:0, mid:0, air:0, hitKick:0, hitMid:0, hitAir:0 };
+    this.S = { kick:0, mid:0, air:0, hitKick:0, hitMid:0, hitAir:0, sub:0 };
     this.AVG = { kick: 0.02, mid: 0.01, air: 0.003 };
     this.AS = [0, 0, 0];
     this.AJ = [0, 0, 0];
@@ -151,22 +256,30 @@ export class AudioVisual {
     this.BY  = new Float32Array(NB);
     this.BPK = new Float32Array(NB);
 
-    // --- lavalampe -------------------------------------------------------
-    this.lavaCv = null; this.lavaG = null; this.lavaImg = null; this.lavaH = 0;
-    // Atten mindre kuler i stedet for ni store: flere moter, flere halser,
-    // og mer aa se paa. Forste forsok brukte gyldne snitt paa BEGGE akser, og
-    // da la alle kulene seg paa en diagonal — to tallrekker fra samme kilde
-    // er ikke uavhengige. Naa kommer x og y fra hver sin hash.
-    const frac = v => v - Math.floor(v);
-    const hash = (i, k) => frac(Math.sin(i * 127.1 + k * 311.7) * 43758.5453);
-    this.blobs = Array.from({ length: 18 }, (_, i) => ({
-      x: 0.06 + hash(i, 1) * 0.88,
-      y: hash(i, 2),
-      vy: (hash(i, 3) < 0.5 ? -1 : 1) * (0.016 + hash(i, 4) * 0.022),
-      r: 0.034 + hash(i, 5) * 0.034,
-      band: i % NB, ph: i * 1.9, rNow: 0.05,
+    // --- lavalampe (WebGL) -------------------------------------------------
+    this.glCv = null; this.gl = null; this.glProg = null; this.glLoc = null;
+    this.glLost = false; this.glDead = false;
+    this.glBuf = new Float32Array(LAVA_N * 3);
+    this.blobs = Array.from({ length: LAVA_N }, (_, i) => ({
+      x: 0.06 + _hash(i, 1) * 0.88,
+      y: _hash(i, 2),
+      vy: (_hash(i, 3) < 0.5 ? -1 : 1) * (0.016 + _hash(i, 4) * 0.022),
+      r: 0.034 + _hash(i, 5) * 0.034,
+      kick: 0.7 + _hash(i, 6) * 0.6,   // egen fjaerstivhet, saa de ikke gaar i takt
+      sp: 0, sv: 0, ph: i * 1.9, rNow: 0.05,
     }));
-    this.lavaIdx = new Int32Array(18);
+
+    // --- diskokule ---------------------------------------------------------
+    this.dRot = 0; this.dPulse = 0; this.dFlash = 0; this.dLastFlash = 0;
+    this.dPrevKick = 0; this.dPrevAir = 0; this.dRS = 0; this.dCyS = 0;
+    this.dBg = null; this.dBgH = 0; this.dBeam = null; this.dBeamKey = '';
+    this.dDot = null; this.dStar = null;
+    this.dTile = new Int16Array(DISCO.N);
+    this.dSX = new Float32Array(D_MAXSPOT); this.dSY = new Float32Array(D_MAXSPOT);
+    this.dSS = new Float32Array(D_MAXSPOT); this.dSA = new Float32Array(D_MAXSPOT);
+    this.dSFX = new Float32Array(D_MAXSPOT); this.dSFY = new Float32Array(D_MAXSPOT);
+    this.dGX = new Float32Array(D_MAXGLINT); this.dGY = new Float32Array(D_MAXGLINT);
+    this.dGV = new Float32Array(D_MAXGLINT);
 
     // --- soyler og baller -------------------------------------------------
     this.COLS = 40;
@@ -236,6 +349,11 @@ export class AudioVisual {
 
       a.sK += kick * kick; a.sM += mid * mid; a.sA += air * air; a.n++;
 
+      const sp1 = this.sp1, sp2 = this.sp2, sa = this.aSub;
+      for (let e = 0; e < 4; e++) { sp1[e] += sa[e] * (x - sp1[e]); sp2[e] += sa[e] * (sp1[e] - sp2[e]); }
+      const v1 = sp2[1] - sp2[0], v2 = sp2[3] - sp2[2];
+      this.s1 += v1 * v1; this.s2 += v2 * v2;
+
       // Filterbanken: ett topassfilter per delefrekvens, baandet er
       // differansen mellom to naboer.
       const p1 = this.bp1, p2 = this.bp2, ae = this.ae, bacc = this.bacc;
@@ -263,6 +381,7 @@ export class AudioVisual {
     this.a20 = c(20); this.a100 = c(100); this.a250 = c(250);
     this.a900 = c(900); this.a8k = c(8000);
     this.ae = EDGES.map(c);
+    this.aSub = [c(18), c(35), c(50), c(85)];
     this.block = Math.max(64, Math.round(sampleRate * BLOCK_MS / 1000));
     this.acc.n = 0; this.acc.sK = 0; this.acc.sM = 0; this.acc.sA = 0;
   }
@@ -274,6 +393,9 @@ export class AudioVisual {
     this.qHK[i] = this.det.kick.push(kick);
     this.qHM[i] = this.det.mid.push(mid);
     this.qHA[i] = this.det.air.push(air);
+    const blk = this.block;
+    this.qSub[i] = Math.sqrt(this.s1 / blk) * 0.35 + Math.sqrt(this.s2 / blk) * 0.65;
+    this.s1 = 0; this.s2 = 0;
     const bl = this.block, ba = this.bacc;
     for (let n = 0; n < NB; n++) { this.qB[n][i] = Math.sqrt(ba[n] / bl); ba[n] = 0; }
     this.head = (i + 1) % this.cap;
@@ -332,7 +454,9 @@ export class AudioVisual {
       for (const key of ['kick','mid','air']) this.S[key] *= 0.9;
       for (const key of ['hitKick','hitMid','hitAir']) this.S[key] *= 0.8;
       for (let n = 0; n < NB; n++) this.BV[n] *= 0.9;
+      this.S.sub *= 0.9;
     } else {
+      this.S.sub += (1 - k) * (this.qSub[i] - this.S.sub);
       for (let n = 0; n < NB; n++) this.BV[n] += (1 - k) * (this.qB[n][i] - this.BV[n]);
       this.S.kick = this.S.kick + (1 - k) * (this.qKick[i] - this.S.kick);
       this.S.mid  = this.S.mid  + (1 - k) * (this.qMid[i]  - this.S.mid);
@@ -345,8 +469,9 @@ export class AudioVisual {
     }
 
     this.phase += dt * 0.0006;
-    if      (this.mode === 'lava') this._drawLava(dt);
-    else if (this.mode === 'bars') this._drawBars(dt);
+    if      (this.mode === 'lava')  this._drawLava(dt);
+    else if (this.mode === 'disco') this._drawDisco(dt);
+    else if (this.mode === 'bars')  this._drawBars(dt);
     else if (this.mode === 'rave') this._drawRave(dt);
     else                           this._draw(dt);
     this.frameMs = this.frameMs * 0.9 + (performance.now() - t0) * 0.1;
@@ -366,12 +491,14 @@ export class AudioVisual {
     return compress(raw, this.BAV[n]);
   }
 
+  /** Returnerer false hvis modusen ikke kan vises her (lava uten WebGL). */
   setMode(m) {
+    if (m === 'lava' && !this._lavaInit()) return false;
     this.mode = m;
     this.fps = this.fpsFor[m] || 30;
     this.throttled = false;
     this.BY.fill(0); this.BPK.fill(0);
-    if (m === 'lava') this._lavaSetup();
+    return true;
   }
 
   _draw(dt) {
@@ -403,88 +530,330 @@ export class AudioVisual {
   }
 
   // =========================================================================
-  //  Lavalampe — metaballs, regnet i lav opplosning
+  //  Lavalampe — metaballs paa GPU
   // =========================================================================
-  // Ekte metaballs betyr aa regne ut et felt for HVER piksel. Paa retina er
-  // det fem millioner punkter ganger ni kuler, tretti ganger i sekundet.
-  // Utelukket i JavaScript.
+  // Flat, som i forbildet: ett hardt skille mellom bakgrunn og lava, og en
+  // loddrett overgang mellom to farger over hele flata. Hovedtraden gjor bare
+  // kulefysikk og ett draw-kall.
   //
-  // Feltet er glatt og har ingen detaljer, saa vi regner det i 132 piksler
-  // bredde og lar nettleseren strekke bildet. Vi skalerer IKKE selv: forste
-  // forsok brukte drawImage, og paa 5,2 megapiksler ga 'high' ni bilder i
-  // sekundet, 'medium' atten, 'low' tretti — mens JS-timeren viste 0,4 ms i
-  // alle tre, fordi skaleringa skjer utenfor koden. Naar CSS strekker
-  // lerretet gjor kompositoren jobben paa GPU, mykt og gratis.
-  _lavaSetup() {
-    this.lavaH = Math.max(24, Math.round(LAVA_W * this.H / this.W));
-    this.lavaCv = document.getElementById('lavaCanvas');
-    if (!this.lavaCv) return;
-    this.lavaCv.width = LAVA_W; this.lavaCv.height = this.lavaH;
-    this.lavaG = this.lavaCv.getContext('2d');
-    this.lavaImg = this.lavaG.createImageData(LAVA_W, this.lavaH);
-    for (let i = 3; i < this.lavaImg.data.length; i += 4) this.lavaImg.data[i] = 255;
-    const hex = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
-    this.lavaRGB = [hex(PALETTE.sky), hex(PALETTE.l1), hex(PALETTE.l2), hex(PALETTE.l3)];
+  // MERK ved maaling: frameMs teller bare JS-tid, og drawArrays returnerer for
+  // GPU-en har begynt. Bildefrekvensen er det aerlige maalet her.
+  _lavaInit() {
+    if (this.glDead || this.glLost) return false;
+    if (this.gl && this.glProg) return true;
+
+    this.glCv = document.getElementById('lavaCanvas');
+    if (!this.glCv) { this.glDead = true; return false; }
+    if (!this.gl) {
+      const gl = this.glCv.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false })
+        || this.glCv.getContext('experimental-webgl');
+      if (!gl) { this.glDead = true; return false; }
+      this.gl = gl;
+      // Et GPU-reset skal ikke gi svart skjerm: bygg opp igjen naar den kommer tilbake.
+      this.glCv.addEventListener('webglcontextlost', e => { e.preventDefault(); this.glLost = true; this.glProg = null; });
+      this.glCv.addEventListener('webglcontextrestored', () => { this.glLost = false; this.glProg = null; });
+    }
+    const gl = this.gl;
+    const deriv = !!gl.getExtension('OES_standard_derivatives');
+    const shader = (type, src) => {
+      const sh = gl.createShader(type);
+      gl.shaderSource(sh, src); gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        console.error('shader:', gl.getShaderInfoLog(sh)); return null;
+      }
+      return sh;
+    };
+    const vs = shader(gl.VERTEX_SHADER, LAVA_VS), fs = shader(gl.FRAGMENT_SHADER, lavaFS(deriv));
+    if (!vs || !fs) { this.glDead = true; return false; }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('link:', gl.getProgramInfoLog(prog)); this.glDead = true; return false;
+    }
+    gl.useProgram(prog);
+    this.glProg = prog;
+
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    this.glLoc = {
+      blob: gl.getUniformLocation(prog, 'uBlob'),
+      ar:   gl.getUniformLocation(prog, 'uAR'),
+    };
+    const hex = h => [parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255];
+    // Sand i bakgrunnen, dyp lilla oeverst som blir lysere nedover.
+    gl.uniform3fv(gl.getUniformLocation(prog, 'uTop'), new Float32Array(hex(PALETTE.l3)));
+    gl.uniform3fv(gl.getUniformLocation(prog, 'uBot'), new Float32Array(hex(PALETTE.l2)));
+    gl.uniform3fv(gl.getUniformLocation(prog, 'uBg'),  new Float32Array(hex(PALETTE.sky)));
+    this.glCv.width = 0;   // tvinger ny storrelse i foerste bilde
+    return true;
   }
 
-  _drawLava(dt) {
+  // Fjaer med demping, per kule: kraften er (maal - posisjon) * stivhet,
+  // minus fart * demping. Utslaget kan ikke hoppe — det maa gjennom en
+  // akselerasjon foerst — og derfor ser det mykt ut uten aa henge etter.
+  _moveBlobs(dt) {
     const s = Math.min(dt, 50) / 1000;
-    if (!this.lavaImg || this.lavaH !== Math.max(24, Math.round(LAVA_W * this.H / this.W)))
-      this._lavaSetup();
-    if (!this.lavaImg) return;
-
-    const beat = Math.min(1, this.S.hitKick * 0.6);
+    const D = 2 * LAVA_ZETA * Math.sqrt(LAVA_K);
+    const maal = Math.min(1.4, this.S.sub / LAVA_REF);
     for (const b of this.blobs) {
-      const e = this._bandRel(b.band);
-      b.y += b.vy * s * (0.6 + e * 1.8 * this.gain);
+      b.sv += ((maal - b.sp) * LAVA_K * b.kick - b.sv * D) * s;
+      b.sp += b.sv * s;
+      const e = b.sp < 0 ? 0 : b.sp;
+      b.y += b.vy * s * (LAVA_BASE + e * LAVA_LIFT);
       if (b.y < -0.18) b.y = 1.18;
       if (b.y >  1.18) b.y = -0.18;
       b.x += Math.sin(this.phase * 0.5 + b.ph) * s * 0.02;
-      if (b.x < 0.05) b.x = 0.05;
-      if (b.x > 0.95) b.x = 0.95;
-      b.rNow = b.r * (0.75 + e * 0.65 * this.gain) * (1 + beat * 0.10);
+      if (b.x < 0.05) b.x = 0.05; if (b.x > 0.95) b.x = 0.95;
+      b.rNow = b.r * (0.72 + e * LAVA_SIZE);
     }
+  }
 
-    const d = this.lavaImg.data, lh = this.lavaH, ar = lh / LAVA_W;
-    const blobs = this.blobs, idx = this.lavaIdx, NBL = blobs.length;
-    let p = 0;
-    for (let py = 0; py < lh; py++) {
-      const fy = (py + 0.5) / lh * ar;
+  _drawLava(dt) {
+    if (!this._lavaInit()) { this._draw(dt); return; }
+    this._moveBlobs(dt);
+    const gl = this.gl, W = this.W, H = this.H;
+    if (this.glCv.width !== W || this.glCv.height !== H) {
+      this.glCv.width = W; this.glCv.height = H;
+      gl.viewport(0, 0, W, H);
+    }
+    const B = this.glBuf;
+    for (let i = 0; i < LAVA_N; i++) {
+      const b = this.blobs[i];
+      B[i*3] = b.x; B[i*3+1] = b.y; B[i*3+2] = b.rNow;
+    }
+    gl.uniform3fv(this.glLoc.blob, B);
+    gl.uniform1f(this.glLoc.ar, H / W);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
 
-      // Hvilke kuler naar denne raden i det hele tatt?
-      let m = 0;
-      for (let i = 0; i < NBL; i++) {
-        const dy = fy - blobs[i].y * ar, reach = blobs[i].rNow * LAVA_REACH;
-        if (dy > -reach && dy < reach) idx[m++] = i;
-      }
+  // =========================================================================
+  //  Diskokule — klassisk, hvitt lys
+  // =========================================================================
+  // Flekkene paa veggen er ekte refleksjoner: lyset fra de to lyskasterne
+  // speiles om hvert speils normal, og der straalen treffer bakveggen blir
+  // det en flekk. Naar kula snurrer, feier flekkene over rommet.
+  //
+  // Tre skalarprodukter per speil og lys, og hver flekk er ETT drawImage av
+  // en ferdig tegnet prikk. Ingen gradient per flekk, ingen fargestrenger i
+  // sloyfa. Under 1 ms per bilde.
+  _discoSprites() {
+    const mk = (size) => { const c = document.createElement('canvas'); c.width = c.height = size; return c; };
+    const dot = mk(64), x = dot.getContext('2d');
+    const gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0,    'rgba(255,253,248,1)');
+    gr.addColorStop(0.16, 'rgba(255,248,236,.9)');
+    gr.addColorStop(0.42, 'rgba(255,244,228,.20)');
+    gr.addColorStop(1,    'rgba(255,240,220,0)');
+    x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+    this.dDot = dot;
 
-      for (let px = 0; px < LAVA_W; px++) {
-        const fx = (px + 0.5) / LAVA_W;
-        let f = 0;
-        for (let j = 0; j < m; j++) {
-          const b = blobs[idx[j]];
-          const dx = fx - b.x, dy = fy - b.y * ar;
-          // r^2/d^2: ingen kvadratrot, og summen gjor at to kuler smelter
-          // sammen naar de naermer seg — det er hele metaball-effekten.
-          f += b.rNow * b.rNow / (dx * dx + dy * dy + 0.0006);
+    // Glimtet i et speil som treffer oyet ditt: et firearmet kors med kjerne.
+    const star = mk(96), y = star.getContext('2d');
+    y.globalCompositeOperation = 'lighter';
+    for (const [w, h] of [[96, 3], [3, 96]]) {
+      const lg = w > h ? y.createLinearGradient(0, 0, 96, 0) : y.createLinearGradient(0, 0, 0, 96);
+      lg.addColorStop(0, 'rgba(255,255,255,0)'); lg.addColorStop(0.5, 'rgba(255,255,255,.95)');
+      lg.addColorStop(1, 'rgba(255,255,255,0)');
+      y.fillStyle = lg; y.fillRect((96 - w) / 2, (96 - h) / 2, w, h);
+    }
+    const core = y.createRadialGradient(48, 48, 0, 48, 48, 18);
+    core.addColorStop(0, 'rgba(255,255,255,1)'); core.addColorStop(1, 'rgba(255,255,255,0)');
+    y.fillStyle = core; y.fillRect(30, 30, 36, 36);
+    this.dStar = star;
+  }
+
+  _drawDisco(dt) {
+    const g = this.g, W = this.W, H = this.H;
+    const s = Math.min(dt, 50) / 1000, now = performance.now();
+    const Dm = DISCO, N = Dm.N;
+
+    const bass = this._bandRel(0) * 0.6 + this._bandRel(1) * 0.4;
+    const mid  = this._bandRel(4) * 0.5 + this._bandRel(5) * 0.5;
+    const air  = this._bandRel(8) * 0.5 + this._bandRel(9) * 0.5;
+
+    const kickHit = rose(this.S.hitKick, this.dPrevKick, 0.33); this.dPrevKick = this.S.hitKick;
+    const airHit  = rose(this.S.hitAir,  this.dPrevAir,  0.50); this.dPrevAir  = this.S.hitAir;
+    if (kickHit) this.dPulse = Math.min(1.15, this.dPulse + kickHit * 0.8);
+    this.dPulse *= Math.pow(0.010, s);
+    // Samme sperre paa 300 ms som strobet i Rave — godt under omraadet som
+    // utloser anfall.
+    if ((kickHit || airHit) && now - this.dLastFlash > 300) {
+      this.dFlash = kickHit ? 1 : 0.45; this.dLastFlash = now;
+    }
+    this.dFlash *= Math.pow(0.004, s);
+    const pulse = this.dPulse;
+
+    // Sakte, som en ekte kule. Det er flekkene langt unna som beveger seg fort.
+    this.dRot += s * (0.16 + mid * 0.30 + pulse * 0.25) * this.gain;
+    if (!this.dDot) this._discoSprites();
+
+    if (!this.dBg || this.dBgH !== H) {
+      this.dBg = g.createLinearGradient(0, 0, 0, H);
+      this.dBg.addColorStop(0, '#0d0a17'); this.dBg.addColorStop(1, '#05040a');
+      this.dBgH = H;
+    }
+    g.fillStyle = this.dBg; g.fillRect(0, 0, W, H);
+
+    // Kula henger ute i rommet, ikke oppe i taket — men aldri saa lavt at den
+    // naar ned i knappene. Den glir til ny plass i stedet for aa hoppe.
+    const minWH = Math.min(W, H);
+    const tR  = minWH * 0.17;
+    const tCy = Math.min(H * 0.50, H * (TOP_LIMIT + 0.05) + tR);
+    if (!this.dRS) { this.dRS = tR; this.dCyS = tCy; }
+    const kf = 1 - Math.exp(-dt / 220);
+    this.dRS += (tR - this.dRS) * kf; this.dCyS += (tCy - this.dCyS) * kf;
+    const cx = W / 2, cy = this.dCyS;
+    const R = this.dRS * (1 + pulse * 0.05 + bass * 0.04);
+
+    const ca = Math.cos(this.dRot), sa = Math.sin(this.dRot);
+    const lightI = 0.42 + bass * 0.55 + pulse * 0.55;
+    const WALL = R * 2.4;
+    const minSp = minWH * 0.010, maxSp = minWH * 0.060;
+    const gl = 1.0 + pulse * 0.8 + air * 0.6;
+    const SX = this.dSX, SY = this.dSY, SS = this.dSS, SA = this.dSA, SFX = this.dSFX, SFY = this.dSFY;
+    const tile = this.dTile;
+
+    let ns = 0, ng = 0;
+    for (let i = 0; i < N; i++) {
+      const ax = Dm.jx[i], ay = Dm.jy[i], az = Dm.jz[i];
+      const nx = ax * ca + az * sa, ny = ay, nz = az * ca - ax * sa;
+      let bestSpec = 0, bestD = 0;
+
+      for (let l = 0; l < 2; l++) {
+        const L = D_LIGHTS[l];
+        const ndl = nx * L[0] + ny * L[1] + nz * L[2];
+        if (ndl <= 0) continue;
+        // Refleksjon av lysretningen om normalen: R = 2(n·L)n - L
+        const rx = 2 * ndl * nx - L[0], ry = 2 * ndl * ny - L[1], rz = 2 * ndl * nz - L[2];
+        if (rz > bestSpec) bestSpec = rz;
+        if (ndl > bestD) bestD = ndl;
+
+        // Gaar straalen bakover, treffer den veggen bak kula.
+        if (rz < -0.08 && ns < D_MAXSPOT) {
+          const t = 1 / -rz;
+          const x = cx + nx * R + rx * t * WALL, y = cy + ny * R + ry * t * WALL;
+          if (x < -maxSp || x > W + maxSp || y < -maxSp || y > H + maxSp) continue;
+          const qx = x - cx, qy = y - cy;
+          if (qx * qx + qy * qy < R * R * 1.1) continue;   // skjult bak kula
+          const tw = 0.75 + 0.25 * Math.sin(this.phase * 9 + i * 1.7 + l);
+          SX[ns] = x; SY[ns] = y; SFX[ns] = cx + nx * R; SFY[ns] = cy + ny * R;
+          SS[ns] = Math.min(maxSp, minSp * (0.8 + t * 0.55) * (0.8 + pulse * 0.45));
+          // Lengre vei = svakere flekk, som med en ekte lyskaster.
+          SA[ns] = Math.min(1, ndl * lightI * tw * (1.25 - Math.min(0.75, t * 0.12)));
+          ns++;
         }
-        // Myk overgang mellom fargene. Med hardt skille faller trappetrinnene
-        // fra lavopplosninga rett i oynene.
-        let k = 0, u = 0;
-        if (f >= LAVA_STOPS[2]) { k = 3; u = 0; }
-        else if (f >= LAVA_STOPS[1]) { k = 2; u = (f - LAVA_STOPS[1]) / (LAVA_STOPS[2] - LAVA_STOPS[1] + 0.70); }
-        else if (f >= LAVA_STOPS[0]) { k = 1; u = (f - LAVA_STOPS[0]) / (LAVA_STOPS[1] - LAVA_STOPS[0] + 0.45); }
-        else { k = 0; u = f / (LAVA_STOPS[0] + 0.30); }
-        u = u < 0 ? 0 : u > 1 ? 1 : u;
-        u = u * u * (3 - 2 * u);
-        const a = this.lavaRGB[k], b2 = this.lavaRGB[k < 3 ? k + 1 : 3];
-        d[p]   = a[0] + (b2[0] - a[0]) * u;
-        d[p+1] = a[1] + (b2[1] - a[1]) * u;
-        d[p+2] = a[2] + (b2[2] - a[2]) * u;
-        p += 4;
       }
+
+      // Synlighet avgjores av den UJUSTERTE normalen, ellers stikker skjeve
+      // speil fram paa baksida.
+      if (Dm.nz[i] * ca - Dm.nx[i] * sa <= 0.02) { tile[i] = -1; continue; }
+      let v = 0.22 + Dm.bias[i] * 1.1 + nz * 0.10 - ny * 0.12 + bestD * 0.22;
+      let lit = 0;
+      if (bestSpec > 0) {
+        const p2 = bestSpec * bestSpec, p4 = p2 * p2, p8 = p4 * p4, p16 = p8 * p8;
+        const col = p16 * p4 * gl * 1.3;       // ^20: smal glans
+        if (col > 0.10) { lit = 1; v = col; }
+        if (bestSpec > 0.985 && ng < D_MAXGLINT) {
+          this.dGX[ng] = cx + nx * R; this.dGY[ng] = cy + ny * R;
+          this.dGV[ng] = (bestSpec - 0.985) / 0.015; ng++;
+        }
+      }
+      const k = v <= 0 ? 0 : v >= 1 ? 23 : (v * 23) | 0;
+      tile[i] = lit * 24 + k;
     }
-    this.lavaG.putImageData(this.lavaImg, 0, 0);
+
+    g.globalCompositeOperation = 'lighter';
+
+    // --- straaler fra kula ut til flekkene. Én delt gradient.
+    const bKey = `${cx|0},${cy|0},${R|0}`;
+    if (bKey !== this.dBeamKey) {
+      const far = Math.hypot(W, H) * 0.7;
+      this.dBeam = g.createRadialGradient(cx, cy, R, cx, cy, far);
+      this.dBeam.addColorStop(0, 'rgba(255,250,240,.16)');
+      this.dBeam.addColorStop(1, 'rgba(255,250,240,0)');
+      this.dBeamKey = bKey;
+    }
+    g.fillStyle = this.dBeam;
+    g.globalAlpha = Math.min(1, 0.35 + bass * 0.6 + pulse * 0.5);
+    g.beginPath();
+    const step = Math.max(1, Math.ceil(ns / D_MAXBEAM));
+    for (let j = 0; j < ns; j += step) {
+      if (SA[j] < 0.35) continue;
+      const fx = SFX[j], fy = SFY[j], x = SX[j], y = SY[j];
+      const dx = x - fx, dy = y - fy, len = Math.hypot(dx, dy) || 1;
+      const w = SS[j] * 0.45, px = -dy / len * w, py = dx / len * w;
+      g.moveTo(fx, fy); g.lineTo(x + px, y + py); g.lineTo(x - px, y - py); g.closePath();
+    }
+    g.fill();
+
+    // --- flekkene
+    for (let j = 0; j < ns; j++) {
+      const sz = SS[j] * 2.6;
+      g.globalAlpha = SA[j];
+      g.drawImage(this.dDot, SX[j] - sz / 2, SY[j] - sz / 2, sz, sz);
+    }
+    g.globalAlpha = 1;
+
+    // --- glorie
+    const hg = g.createRadialGradient(cx, cy, R * 0.8, cx, cy, R * 2.2);
+    hg.addColorStop(0, `rgba(255,248,236,${(0.08 + bass * 0.14).toFixed(3)})`);
+    hg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = hg;
+    g.beginPath(); g.arc(cx, cy, R * 2.2, 0, 6.2832); g.fill();
+    g.globalCompositeOperation = 'source-over';
+
+    // --- snor og kropp. Kroppen lyses litt opp, ellers blir fugene svarte hull.
+    g.strokeStyle = 'rgba(232,226,246,.26)';
+    g.lineWidth = Math.max(1, minWH * 0.003);
+    g.beginPath(); g.moveTo(cx, 0); g.lineTo(cx, cy - R * 0.99); g.stroke();
+    g.fillStyle = '#16141d';
+    g.beginPath(); g.arc(cx, cy, R * 1.01, 0, 6.2832); g.fill();
+
+    // --- speilene
+    for (let i = 0; i < N; i++) {
+      const tv = tile[i];
+      if (tv < 0) continue;
+      g.fillStyle = tv >= 24 ? D_WHITE[tv - 24] : D_SILVER[tv];
+      const o = i * 4;
+      g.beginPath();
+      for (let c = 0; c < 4; c++) {
+        const X = cx + (Dm.qx[o + c] * ca + Dm.qz[o + c] * sa) * R;
+        const Y = cy + Dm.qy[o + c] * R;
+        c === 0 ? g.moveTo(X, Y) : g.lineTo(X, Y);
+      }
+      g.closePath(); g.fill();
+    }
+
+    // Fast lyssetting oppaa den roterende kula: lyspunkt oppe til venstre,
+    // mork kant rundt. Det er dette som gjor at den leser som en KULE.
+    const vg = g.createRadialGradient(cx - R * 0.34, cy - R * 0.38, R * 0.04, cx, cy, R * 1.02);
+    vg.addColorStop(0, 'rgba(255,255,255,.10)');
+    vg.addColorStop(0.62, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(5,4,10,.60)');
+    g.fillStyle = vg;
+    g.beginPath(); g.arc(cx, cy, R * 1.02, 0, 6.2832); g.fill();
+
+    // --- glimt der et speil sender lyset rett mot deg
+    if (ng) {
+      g.globalCompositeOperation = 'lighter';
+      for (let j = 0; j < ng; j++) {
+        const sz = R * (0.22 + this.dGV[j] * 0.28) * (1 + pulse * 0.6);
+        g.globalAlpha = Math.min(1, 0.35 + this.dGV[j] * 0.65);
+        g.drawImage(this.dStar, this.dGX[j] - sz / 2, this.dGY[j] - sz / 2, sz, sz);
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'source-over';
+    }
+
+    if (this.dFlash > 0.02) {
+      g.fillStyle = `rgba(255,252,245,${(this.dFlash * 0.10).toFixed(3)})`;
+      g.fillRect(0, 0, W, H);
+    }
   }
 
   // =========================================================================

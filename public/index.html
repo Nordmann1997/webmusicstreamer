@@ -105,9 +105,7 @@
   #bgCanvas, #lavaCanvas {
     position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 0;
   }
-  /* Lavalampa tegnes i 132 piksler og strekkes av nettleseren: kompositoren
-     gjor skaleringa paa GPU. Gjorde vi det i canvas kostet det ni bilder i
-     sekundet paa retina. */
+  /* Lavalampa tegnes med WebGL i full opplosning, paa eget lerret. */
   #lavaCanvas { display: none; }
   body.m-lava #bgCanvas { display: none; }
   body.m-lava #lavaCanvas { display: block; }
@@ -435,6 +433,7 @@
   <button data-mode="lava">Lava</button>
   <button data-mode="bars" class="on">Bars</button>
   <button data-mode="rave">Rave</button>
+  <button data-mode="disco">Disco</button>
 </div>
 
 <button id="editBtn">Edit</button>
@@ -596,7 +595,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-24.1500';
+const VERSION = '2026-09-24.1830';
 
 const $ = id => document.getElementById(id);
 
@@ -1592,8 +1591,10 @@ $('devClose').onclick = () => $('devPanel').classList.remove('on');
 let MODE = 'bars';
 try { MODE = localStorage.getItem('wmMode') || 'bars'; } catch {}
 function applyMode() {
-  visual.setMode(MODE);
-  document.body.classList.toggle('rave', MODE === 'rave');
+  // Lavaen trenger WebGL. Finnes det ikke, blir det Bars i stedet for svart skjerm.
+  if (!visual.setMode(MODE)) { MODE = 'bars'; visual.setMode(MODE); }
+  // Disco deler den morke drakta med Rave: lys tekst paa mork bunn.
+  document.body.classList.toggle('rave', MODE === 'rave' || MODE === 'disco');
   document.body.classList.toggle('m-lava', MODE === 'lava');
   document.body.classList.toggle('m-bars', MODE === 'bars');
   document.querySelectorAll('#modes button').forEach(b =>
