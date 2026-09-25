@@ -379,7 +379,7 @@
     <p class="fine2">Bluetooth speakers usually need a nudge later. Only this
        device changes — the others stay where they are.</p>
     <div class="lab"><span>Earlier</span><span><b id="fineVal">0</b> ms</span><span>Later</span></div>
-    <input type="range" id="fine" min="-150" max="150" step="1" value="0">
+    <input type="range" id="fine" min="-250" max="250" step="1" value="0">
     <button class="okbtn" id="okBtn" style="width:100%;margin-top:12px">Done</button>
   </div>
 </div>
@@ -595,7 +595,7 @@ import { AudioVisual } from './visual.js';
 // Bumpes ved hver endring. Vises nederst pa sida, sa du kan se med ett blikk
 // om en enhet kjorer den versjonen du tror den gjor — etter en manuell
 // filkopiering er det ellers umulig aa vite.
-const VERSION = '2026-09-24.1830';
+const VERSION = '2026-09-25.0900';
 
 const $ = id => document.getElementById(id);
 
@@ -1580,7 +1580,7 @@ $('fine').oninput = (e) => {
 };
 {
   const saved = Number($('nudge').value) || 0;
-  if (saved >= -150 && saved <= 150) { $('fine').value = saved; $('fineVal').textContent = saved; }
+  if (saved >= -250 && saved <= 250) { $('fine').value = saved; $('fineVal').textContent = saved; }
 }
 
 // --- utviklerskuffen -------------------------------------------------------
@@ -1592,7 +1592,9 @@ let MODE = 'bars';
 try { MODE = localStorage.getItem('wmMode') || 'bars'; } catch {}
 function applyMode() {
   // Lavaen trenger WebGL. Finnes det ikke, blir det Bars i stedet for svart skjerm.
-  if (!visual.setMode(MODE)) { MODE = 'bars'; visual.setMode(MODE); }
+  // Sjekk mot false, ikke «usann»: en eldre visual.js fra nettleserens
+  // mellomlager returnerer ingenting, og da ble HVER knapp til Bars.
+  if (visual.setMode(MODE) === false) { MODE = 'bars'; visual.setMode(MODE); }
   // Disco deler den morke drakta med Rave: lys tekst paa mork bunn.
   document.body.classList.toggle('rave', MODE === 'rave' || MODE === 'disco');
   document.body.classList.toggle('m-lava', MODE === 'lava');
